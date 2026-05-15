@@ -47,7 +47,7 @@ ECAPA-TDNN/
 |---|---|---|
 | `vuhoanhuy/dolly-audio-1000h-vietnamese` | 152  | предобучение |
 | `dungnasa10/vietnamese-speaker-verification` (VLSP 2021) | 1015  | дообучение |
-| VLSP 2021 Public Test | - | оценка EER |
+| `VLSP 2021 Public Test` | - | оценка EER |
 
 ---
 
