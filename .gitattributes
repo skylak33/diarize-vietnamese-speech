@@ -1,0 +1,2 @@
+kaggle/ecapa-tdnn-kaggle.zip filter=lfs diff=lfs merge=lfs -text
+exps/exp1/model/model_0082.model filter=lfs diff=lfs merge=lfs -text

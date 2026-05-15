@@ -1,0 +1,159 @@
+import glob, numpy, os, random, soundfile, torch, requests, io, time
+from scipy import signal
+from torch.utils.data import IterableDataset
+import pyarrow.parquet as pq
+
+
+HF_TOKEN = os.environ.get('HF_TOKEN', '')
+PARQUET_URLS = [
+    f"https://huggingface.co/datasets/vuhoanhuy/dolly-audio-1000h-vietnamese/resolve/refs%2Fconvert%2Fparquet/default/train/{i:04d}.parquet"
+    for i in range(332)
+]
+
+def download_file(url, path, token=''):
+    headers = {'Authorization': f'Bearer {token}'} if token else {}
+    print(f"Downloading {os.path.basename(path)} ...", flush=True)
+    with requests.get(url, headers=headers, stream=True, timeout=120) as r:
+        r.raise_for_status()
+        total = int(r.headers.get('content-length', 0))
+        downloaded = 0
+        with open(path, 'wb') as f:
+            for chunk in r.iter_content(chunk_size=8*1024*1024):
+                f.write(chunk)
+                downloaded += len(chunk)
+                if total:
+                    print(f"\r  {downloaded/1e6:.0f}/{total/1e6:.0f} MB", end='', flush=True)
+    print(f"\r  Done: {downloaded/1e6:.0f} MB", flush=True)
+
+class train_loader(IterableDataset):
+    def __len__(self):
+        return 1_800_000
+    def __init__(self, num_frames, musan_path=None, rir_path=None, **kwargs):
+        self.num_frames  = num_frames
+        self.noisesnr    = {'noise': [0,15], 'speech': [13,20], 'music': [5,15]}
+        self.numnoise    = {'noise': [1,1],  'speech': [3,8],   'music': [1,1]}
+        self.noiselist   = {}
+        self.rir_files   = []
+
+        if musan_path and os.path.exists(musan_path):
+            for file in glob.glob(os.path.join(musan_path, '*/*/*/*.wav')):
+                key = file.split('/')[-4]
+                self.noiselist.setdefault(key, []).append(file)
+        if rir_path and os.path.exists(rir_path):
+            self.rir_files = glob.glob(os.path.join(rir_path, '*/*/*.wav'))
+
+        self.speaker_map     = {}
+        self.speaker_counter = 0
+        self.token           = HF_TOKEN
+        self.urls            = PARQUET_URLS.copy()
+        self.cache_dir       = '/tmp/ecapa_parquet'
+        os.makedirs(self.cache_dir, exist_ok=True)
+
+    def _get_label(self, speaker_id):
+        if speaker_id not in self.speaker_map:
+            self.speaker_map[speaker_id] = self.speaker_counter
+            self.speaker_counter += 1
+        label = self.speaker_map[speaker_id]
+        return label % 152  # clamp чтобы не выйти за n_class
+
+    def _process(self, audio_array):
+        audio  = numpy.array(audio_array, dtype=numpy.float32)
+        length = self.num_frames * 160 + 240
+        if audio.shape[0] <= length:
+            audio = numpy.pad(audio, (0, length - audio.shape[0]), 'wrap')
+        start = numpy.int64(random.random() * (audio.shape[0] - length))
+        audio = audio[start:start + length]
+        audio = numpy.stack([audio], axis=0)
+        augtype = random.randint(0, 5)
+        if   augtype == 1 and self.rir_files:
+            audio = self.add_rev(audio)
+        elif augtype == 2 and 'speech' in self.noiselist:
+            audio = self.add_noise(audio, 'speech')
+        elif augtype == 3 and 'music'  in self.noiselist:
+            audio = self.add_noise(audio, 'music')
+        elif augtype == 4 and 'noise'  in self.noiselist:
+            audio = self.add_noise(audio, 'noise')
+        elif augtype == 5 and 'speech' in self.noiselist and 'music' in self.noiselist:
+            audio = self.add_noise(audio, 'speech')
+            audio = self.add_noise(audio, 'music')
+        return audio[0]
+
+    def _read_audio_from_row(self, row):
+        audio_col = row['audio']
+        # В parquet аудио хранится как dict с bytes или как numpy array
+        if isinstance(audio_col, dict):
+            if 'bytes' in audio_col and audio_col['bytes']:
+                audio, sr = soundfile.read(io.BytesIO(audio_col['bytes']))
+                return audio
+            elif 'array' in audio_col:
+                return numpy.array(audio_col['array'], dtype=numpy.float32)
+        elif isinstance(audio_col, bytes):
+            audio, sr = soundfile.read(io.BytesIO(audio_col))
+            return audio
+        return None
+
+    def __iter__(self):
+        urls = self.urls.copy()
+        random.shuffle(urls)
+
+        for url in urls:
+            filename = url.split('/')[-1].split('?')[0]
+            local_path = os.path.join(self.cache_dir, filename)
+
+            # Скачиваем если нет
+            try:
+                if not os.path.exists(local_path):
+                    download_file(url, local_path, self.token)
+            except Exception as e:
+                print(f"Failed to download {filename}: {e}", flush=True)
+                continue
+
+            # Читаем parquet
+            try:
+                table  = pq.read_table(local_path)
+                df     = table.to_pydict()
+                n_rows = len(df['audio'])
+                indices = list(range(n_rows))
+                random.shuffle(indices)
+
+                for i in indices:
+                    row = {k: df[k][i] for k in df}
+                    audio = self._read_audio_from_row(row)
+                    if audio is None or len(audio) < 1000:
+                        continue
+                    speaker_id = str(row.get('voice_id') or row.get('speaker_id') or 'spk_0')
+                    label      = self._get_label(speaker_id)
+                    audio      = self._process(audio)
+                    yield torch.FloatTensor(audio), label
+
+            except Exception as e:
+                print(f"Error reading {filename}: {e}", flush=True)
+            finally:
+                # Удаляем файл после обработки
+                if os.path.exists(local_path):
+                    os.remove(local_path)
+                    print(f"Deleted {filename}", flush=True)
+
+    def add_rev(self, audio):
+        rir, sr = soundfile.read(random.choice(self.rir_files))
+        rir     = numpy.expand_dims(rir.astype(numpy.float32), 0)
+        rir     = rir / numpy.sqrt(numpy.sum(rir**2))
+        return signal.convolve(audio, rir, mode='full')[:, :self.num_frames * 160 + 240]
+
+    def add_noise(self, audio, noisecat):
+        clean_db  = 10 * numpy.log10(numpy.mean(audio**2) + 1e-4)
+        numnoise  = self.numnoise[noisecat]
+        noiselist = random.sample(self.noiselist[noisecat], random.randint(numnoise[0], numnoise[1]))
+        noises    = []
+        length    = self.num_frames * 160 + 240
+        for noise in noiselist:
+            na, sr = soundfile.read(noise)
+            if na.shape[0] <= length:
+                na = numpy.pad(na, (0, length - na.shape[0]), 'wrap')
+            start = numpy.int64(random.random() * (na.shape[0] - length))
+            na    = na[start:start + length]
+            na    = numpy.stack([na], axis=0)
+            noise_db = 10 * numpy.log10(numpy.mean(na**2) + 1e-4)
+            noisesnr = random.uniform(self.noisesnr[noisecat][0], self.noisesnr[noisecat][1])
+            noises.append(numpy.sqrt(10**((clean_db - noise_db - noisesnr) / 10)) * na)
+        return numpy.sum(numpy.concatenate(noises, axis=0), axis=0, keepdims=True) + audio
