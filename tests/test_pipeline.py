@@ -3,7 +3,7 @@ import numpy as np
 import pytest
 import torch
 from utils.seed import set_seed
-from diarize.cluster import cluster_embeddings, merge_short_segments
+from diarize.cluster import cluster_embeddings, merge_short_segments, smooth_labels
 from diarize.pipeline import merge_consecutive_segments, partition_overlapping_windows, extract_embeddings_for_segments
 
 
@@ -42,3 +42,12 @@ def test_deterministic_clustering(method):
 def test_bad_window():
     with pytest.raises(ValueError):
         extract_embeddings_for_segments(None,np.zeros(16000),[(0,1)],step_sec=0)
+
+
+def test_postprocessing_rejects_misaligned_inputs():
+    with pytest.raises(ValueError,match='equal length'):
+        merge_short_segments([(0,1)],np.array([]))
+    with pytest.raises(ValueError,match='equal length'):
+        smooth_labels([(0,1)],np.array([]))
+    with pytest.raises(ValueError,match='positive odd'):
+        smooth_labels([],np.array([]),window=2)

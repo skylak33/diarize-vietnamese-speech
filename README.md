@@ -29,6 +29,10 @@ pip install -r requirements-dev.txt
 python -m pytest -q
 ```
 
+GitHub Actions запускает тот же CPU test suite на Python 3.11. Workflow не скачивает
+Git LFS checkpoints и не обращается к Kaggle/Hugging Face: CI проверяет логику на
+синтетических fixtures, а реальные corpus/GPU прогоны остаются отдельным этапом.
+
 На Kaggle сначала проверьте уже установленные torch/torchaudio; не заменяйте CUDA-сборку
 на CPU-сборку. `--device auto` выбирает CUDA при наличии, иначе CPU;
 `--device cuda` при отсутствии CUDA выдаёт ошибку. Обучение автоматически включает
@@ -346,6 +350,24 @@ collar, overlap policy, count mode, seed и версии для каждой т�
 побитовое совпадение между CPU, одной GPU и DataParallel не гарантируется.
 Для публикации сохраните `pip freeze`, git diff/commit, конфиги и evaluation manifests.
 Реальные DER/EER в этом README не приводятся: сначала выполните команды выше.
+
+### Smoke checks
+
+Без внешних данных и GPU можно проверить CLI, notebook и локальные checkpoints:
+
+```bash
+python -m pytest -q
+python -m compileall -q models train diarize eval experiments utils
+python train/run.py --help
+python eval/eer.py --help
+python eval/der.py --help
+python diarize/pipeline.py --help
+```
+
+Полный Kaggle smoke run требует подключённых datasets, Internet для ViYT-Diar/Silero
+и GPU runtime. Считайте успешным только завершённый notebook с `manifest.json`,
+`der_results.json` и `status: complete`; локальный синтетический тест notebook не
+является измерением качества и не должен попадать в таблицу DER/EER.
 
 ## RTTM и Audacity
 

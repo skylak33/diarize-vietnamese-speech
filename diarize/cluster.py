@@ -142,6 +142,10 @@ def merge_short_segments(
     Объединить слишком короткие сегменты с соседними.
     Короткий сегмент получает метку предыдущего сегмента.
     """
+    if len(segments) != len(labels):
+        raise ValueError("segments and labels must have equal length")
+    if min_duration < 0:
+        raise ValueError("min_duration must be non-negative")
     if len(segments) == 0:
         return segments, labels
 
@@ -169,6 +173,10 @@ def smooth_labels(
     Сгладить метки спикеров скользящим большинством.
     Убирает одиночные ошибочные переключения.
     """
+    if len(segments) != len(labels):
+        raise ValueError("segments and labels must have equal length")
+    if window < 1 or window % 2 == 0:
+        raise ValueError("window must be a positive odd integer")
     if len(labels) <= window:
         return labels
 

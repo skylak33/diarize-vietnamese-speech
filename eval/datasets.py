@@ -15,7 +15,7 @@ EVAL_SPLITS = {'test', 'public_test', 'validation', 'dev'}
 def read_manifest(path, audio_root=None, split='test'):
     if split not in EVAL_SPLITS:
         raise ValueError('Evaluation requires test/public_test/validation/dev, never train')
-    root = Path(audio_root or Path(path).parent)
+    root = Path(audio_root or Path(path).parent).resolve()
     with open(path, newline='', encoding='utf-8-sig') as handle:
         reader = csv.DictReader(handle)
         if not {'utterance_id','path','speaker_id','split'} <= set(reader.fieldnames or []):
@@ -25,19 +25,28 @@ def read_manifest(path, audio_root=None, split='test'):
         raise ValueError('Manifest contains official test data; select its test split for evaluation')
     selected = {}
     train_speakers = {r['speaker_id'] for r in rows if r['split'] == 'train'}
-    train_paths = {(root / r['path']).resolve() for r in rows if r['split'] == 'train'}
+    resolved_paths = []
     for row in rows:
+        audio = (root / row['path']).resolve()
+        if not audio.is_relative_to(root):
+            raise ValueError(f"Manifest path escapes audio_root: {row['path']}")
+        resolved_paths.append(audio)
+    train_paths = {audio for row, audio in zip(rows, resolved_paths) if row['split'] == 'train'}
+    selected_paths = set()
+    for row, audio in zip(rows, resolved_paths):
         if row['split'] != split:
             continue
         uid = row['utterance_id']
-        audio = (root / row['path']).resolve()
         if not uid or not row['speaker_id'] or uid in selected:
             raise ValueError('Empty/duplicate utterance ID or empty speaker ID')
         if audio in train_paths or row['speaker_id'] in train_speakers:
             raise ValueError(f'Train/evaluation leakage in manifest: {uid}')
+        if audio in selected_paths:
+            raise ValueError(f'Duplicate evaluation audio path in manifest: {audio}')
         if not audio.is_file():
             raise FileNotFoundError(audio)
         selected[uid] = {'audio': str(audio), 'speaker': row['speaker_id']}
+        selected_paths.add(audio)
     if not selected:
         raise ValueError(f'No records for split {split} in {path}')
     return selected
@@ -81,21 +90,32 @@ def read_trials(path, records=None, audio_root=None, order='label_first', trials
     trials = []
     resolve_directly = records is None
     records = {} if resolve_directly else records.copy()
+    trial_root = Path(audio_root).resolve() if resolve_directly and audio_root else None
+    direct_paths = {}
     for label, a, b in rows:
         if label not in labels or a == b:
             raise ValueError(f'Invalid trial: {label} {a} {b}')
         for uid in (a,b):
             if resolve_directly:
-                if not audio_root:
+                if trial_root is None:
                     raise ValueError('Trials without manifest require --audio_root')
-                audio = (Path(audio_root) / uid).resolve()
+                audio = (trial_root / uid).resolve()
+                if not audio.is_relative_to(trial_root):
+                    raise ValueError(f'Trial path escapes audio_root: {uid}')
                 if not audio.is_file():
                     raise FileNotFoundError(audio)
+                if audio in direct_paths and direct_paths[audio] != uid:
+                    raise ValueError(f'Trial IDs resolve to the same audio: {direct_paths[audio]}, {uid}')
+                direct_paths[audio] = uid
                 records[uid] = {'audio':str(audio), 'speaker':None}
             elif uid not in records:
                 raise ValueError(f'Trial refers outside selected evaluation split: {uid}')
-        if records[a]['speaker'] is not None and labels[label] != int(records[a]['speaker'] == records[b]['speaker']):
-            raise ValueError(f'Trial label contradicts speaker metadata: {a}, {b}')
+        if not resolve_directly:
+            speakers = records[a].get('speaker'), records[b].get('speaker')
+            if None in speakers:
+                raise ValueError(f'Trial metadata is missing a speaker ID: {a}, {b}')
+            if labels[label] != int(speakers[0] == speakers[1]):
+                raise ValueError(f'Trial label contradicts speaker metadata: {a}, {b}')
         trials.append((labels[label], a, b))
     if not trials or {t[0] for t in trials} != {0,1}:
         raise ValueError('Protocol needs both positive and negative trials')

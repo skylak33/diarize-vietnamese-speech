@@ -27,6 +27,28 @@ def test_manifest_rejects_leakage(tmp_path):
         read_manifest(p)
 
 
+def test_manifest_rejects_paths_outside_root_and_duplicate_audio(tmp_path):
+    root=tmp_path/'audio'; root.mkdir()
+    (root/'nested').mkdir(); (root/'nested'/'a.wav').touch()
+    outside=tmp_path/'outside.wav'; outside.touch()
+    manifest=tmp_path/'manifest.csv'
+    manifest.write_text('utterance_id,path,speaker_id,split\na,nested/a.wav,A,test\n')
+    assert read_manifest(manifest, root)['a']['audio'] == str((root/'nested'/'a.wav').resolve())
+    manifest.write_text('utterance_id,path,speaker_id,split\na,../outside.wav,A,test\n')
+    with pytest.raises(ValueError,match='escapes'):
+        read_manifest(manifest, root)
+    manifest.write_text('utterance_id,path,speaker_id,split\na,nested/a.wav,A,test\nb,nested/a.wav,B,test\n')
+    with pytest.raises(ValueError,match='Duplicate evaluation audio'):
+        read_manifest(manifest, root)
+
+
+def test_trials_require_complete_manifest_speaker_metadata(tmp_path):
+    p=tmp_path/'trials.txt'; p.write_text('1 a b\n0 a c\n')
+    records={'a':{'speaker':'A'},'b':{'speaker':None},'c':{'speaker':'C'}}
+    with pytest.raises(ValueError,match='missing a speaker'):
+        read_trials(p, records)
+
+
 def test_controlled_ablation():
     args=Namespace(method='ahc',threshold=.65,vad_threshold=.5,window_sec=1.5,
                    step_sec=None,speaker_mode='automatic',experiment='all')
@@ -62,3 +84,17 @@ def test_vlsp_missing_audio_not_skipped(tmp_path):
     path=tmp_path/'pairs.txt'; path.write_text('missing.wav,b.wav,1\na.wav,c.wav,0\n')
     with pytest.raises(FileNotFoundError):
         read_trials(path,audio_root=tmp_path,trials_format='vlsp')
+
+
+def test_direct_trials_reject_path_escape_and_aliases(tmp_path):
+    root=tmp_path/'audio'; root.mkdir()
+    for name in ('a.wav','b.wav'):
+        (root/name).touch()
+    outside=tmp_path/'outside.wav'; outside.touch()
+    path=tmp_path/'pairs.txt'
+    path.write_text('../outside.wav,a.wav,1\na.wav,b.wav,0\n')
+    with pytest.raises(ValueError,match='escapes'):
+        read_trials(path,audio_root=root,trials_format='vlsp')
+    path.write_text('a.wav,sub/../a.wav,1\na.wav,b.wav,0\n')
+    with pytest.raises(ValueError,match='same audio'):
+        read_trials(path,audio_root=root,trials_format='vlsp')
