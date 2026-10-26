@@ -1,0 +1,20 @@
+# Documented CLI recipe; set actual dataset paths via CLI.
+dataset: vlsp
+C: 1024
+n_class: 1015
+num_frames: 200
+batch_size: 256
+n_cpu: 0
+max_epoch: 80
+lr: 0.001
+lr_decay: 0.97
+test_step: 1
+m: 0.2
+s: 30
+augmentation: none
+musan_path: null
+rir_path: null
+metadata_path: null
+audio_base: null
+seed: 42
+device: auto

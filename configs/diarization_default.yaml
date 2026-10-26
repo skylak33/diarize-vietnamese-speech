@@ -1,0 +1,20 @@
+# Documented CLI recipe; YAML is not automatically loaded.
+sample_rate: 16000
+embedding:
+  window_sec: 1.5
+  step_sec: 0.75
+  min_segment_sec: 0.5
+vad:
+  threshold: 0.5
+  min_speech_ms: 250
+  min_silence_ms: 100
+  speech_pad_ms: 30
+clustering:
+  method: ahc
+  threshold: 0.65
+  max_speakers: 10
+evaluation:
+  collar: 0.25
+  skip_overlap: false
+seed: 42
+device: auto

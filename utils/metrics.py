@@ -2,7 +2,35 @@ import os
 import numpy
 import torch
 from sklearn import metrics
-from operator import itemgetter
+
+
+def verification_metrics(scores, labels, p_target=0.05, c_miss=1., c_fa=1.):
+    """EER by linear interpolation on tie-grouped ROC; normalized minDCF.
+
+    Accept target when score >= threshold. EER threshold is the nearest
+    empirical operating point, since an interpolated EER can require randomization.
+    """
+    scores, labels = numpy.asarray(scores, dtype=float), numpy.asarray(labels)
+    if scores.ndim != 1 or scores.shape != labels.shape or not numpy.isfinite(scores).all():
+        raise ValueError("Scores/labels must be equally sized finite vectors")
+    if set(labels.tolist()) != {0, 1}:
+        raise ValueError("EER requires both binary target and non-target labels")
+    if not 0 < p_target < 1 or min(c_miss, c_fa) <= 0:
+        raise ValueError("Require 0 < p_target < 1 and positive costs")
+    fpr, tpr, thresholds = metrics.roc_curve(labels, scores, drop_intermediate=False)
+    thresholds[0] = numpy.nextafter(scores.max(), numpy.inf)
+    fnr = 1 - tpr
+    diff = fpr - fnr
+    hi = int(numpy.flatnonzero(diff >= 0)[0])
+    lo = max(0, hi - 1)
+    weight = 0 if diff[hi] == diff[lo] else -diff[lo] / (diff[hi] - diff[lo])
+    eer = fpr[lo] + weight * (fpr[hi] - fpr[lo])
+    costs = c_miss * fnr * p_target + c_fa * fpr * (1 - p_target)
+    idx = int(numpy.argmin(costs))
+    nearest = int(numpy.argmin(numpy.abs(diff)))
+    return dict(EER=float(eer * 100), minDCF=float(costs[idx] / min(c_miss*p_target, c_fa*(1-p_target))),
+                threshold=float(thresholds[nearest]), minDCF_threshold=float(thresholds[idx]),
+                p_target=p_target, c_miss=c_miss, c_fa=c_fa)
 
 
 def init_args(args):
@@ -13,7 +41,8 @@ def init_args(args):
 
 
 def tuneThresholdfromScore(scores, labels, target_fa, target_fr=None):
-    fpr, tpr, thresholds = metrics.roc_curve(labels, scores, pos_label=1)
+    result = verification_metrics(scores, labels)
+    fpr, tpr, thresholds = metrics.roc_curve(labels, scores, pos_label=1, drop_intermediate=False)
     fnr = 1 - tpr
     tunedThreshold = []
     if target_fr:
@@ -23,33 +52,15 @@ def tuneThresholdfromScore(scores, labels, target_fa, target_fr=None):
     for tfa in target_fa:
         idx = numpy.nanargmin(numpy.absolute((tfa - fpr)))
         tunedThreshold.append([thresholds[idx], fpr[idx], fnr[idx]])
-    idxE = numpy.nanargmin(numpy.absolute((fnr - fpr)))
-    eer = max(fpr[idxE], fnr[idxE]) * 100
+    eer = result["EER"]
     return tunedThreshold, eer, fpr, fnr
 
 
 def ComputeErrorRates(scores, labels):
-    sorted_indexes, thresholds = zip(
-        *sorted(
-            [(index, threshold) for index, threshold in enumerate(scores)],
-            key=itemgetter(1),
-        )
-    )
-    labels = [labels[i] for i in sorted_indexes]
-    fnrs = []
-    fprs = []
-    for i in range(0, len(labels)):
-        if i == 0:
-            fnrs.append(labels[i])
-            fprs.append(1 - labels[i])
-        else:
-            fnrs.append(fnrs[i - 1] + labels[i])
-            fprs.append(fprs[i - 1] + 1 - labels[i])
-    fnrs_norm = sum(labels)
-    fprs_norm = len(labels) - fnrs_norm
-    fnrs = [x / float(fnrs_norm) for x in fnrs]
-    fprs = [1 - x / float(fprs_norm) for x in fprs]
-    return fnrs, fprs, thresholds
+    verification_metrics(scores, labels)  # validate binary classes and finite scores
+    fprs, tprs, thresholds = metrics.roc_curve(labels, scores, drop_intermediate=False)
+    thresholds[0] = numpy.nextafter(max(scores), numpy.inf)
+    return (1 - tprs).tolist(), fprs.tolist(), thresholds.tolist()
 
 
 def ComputeMinDcf(fnrs, fprs, thresholds, p_target, c_miss, c_fa):

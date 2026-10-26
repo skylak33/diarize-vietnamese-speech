@@ -3,7 +3,7 @@ cluster.py — Кластеризация эмбеддингов говорящ�
 
 Два метода:
     - AHC  (Agglomerative Hierarchical Clustering) — простой, быстрый
-    - Spectral — точнее при перекрытиях речи, но медленнее
+    - Spectral — кластеризация по матрице сходства
 """
 
 import numpy
@@ -43,6 +43,7 @@ def cluster_spectral(
     embeddings: numpy.ndarray,
     n_speakers: int   = None,
     max_speakers: int = 10,
+    seed: int = 42,
 ) -> numpy.ndarray:
     """
     Спектральная кластеризация 
@@ -56,23 +57,23 @@ def cluster_spectral(
         model = SpectralClustering(
             n_clusters        = n_speakers,
             affinity          = "precomputed",
-            random_state      = 42,
+            random_state      = seed,
             assign_labels     = "kmeans",
         )
         labels = model.fit_predict(sim_matrix)
         return labels
 
     # автоподбор числа спикеров
-    best_k      = 2
+    best_k      = 1
     best_score  = -1
-    best_labels = None
+    best_labels = numpy.zeros(len(embeddings), dtype=int)
     n_max = min(max_speakers, len(embeddings) - 1)
 
     for k in range(2, n_max + 1):
         model = SpectralClustering(
             n_clusters    = k,
             affinity      = "precomputed",
-            random_state  = 42,
+            random_state  = seed,
             assign_labels = "kmeans",
         )
         lbls = model.fit_predict(sim_matrix)
@@ -93,20 +94,37 @@ def cluster_embeddings(
     n_speakers: int   = None,
     threshold: float  = 0.7,
     max_speakers: int = 10,
+    seed: int = 42,
 ) -> numpy.ndarray:
     """
     Кластеризация эмбеддингов говорящих.
     """
+    embeddings = numpy.asarray(embeddings)
+    if method not in {"ahc", "spectral"} or max_speakers < 1:
+        raise ValueError("Invalid method or max_speakers")
+    if n_speakers is not None and not 1 <= n_speakers <= len(embeddings):
+        raise ValueError("n_speakers must be between 1 and number of embeddings")
     if len(embeddings) == 0:
         return numpy.array([], dtype=int)
 
-    if len(embeddings) == 1:
-        return numpy.array([0])
+    if embeddings.ndim != 2 or not numpy.isfinite(embeddings).all() or (numpy.linalg.norm(embeddings, axis=1) == 0).any():
+        raise ValueError("Embeddings must be finite nonzero vectors")
+    if len(embeddings) == 1 or n_speakers == 1 or (n_speakers is None and max_speakers == 1):
+        return numpy.zeros(len(embeddings), dtype=int)
+    if n_speakers == len(embeddings):
+        return numpy.arange(len(embeddings))
+    if method == "spectral" and n_speakers is None:
+        # AHC gate allows a one-speaker solution, undefined for silhouette selection.
+        gate = cluster_ahc(embeddings, threshold=threshold)
+        if len(set(gate)) == 1 or len(embeddings) == 2:
+            return gate
 
     if method == "ahc":
         labels = cluster_ahc(embeddings, n_speakers=n_speakers, threshold=threshold)
+        if n_speakers is None and len(set(labels)) > max_speakers:
+            labels = cluster_ahc(embeddings, n_speakers=max_speakers)
     elif method == "spectral":
-        labels = cluster_spectral(embeddings, n_speakers=n_speakers, max_speakers=max_speakers)
+        labels = cluster_spectral(embeddings, n_speakers=n_speakers, max_speakers=max_speakers, seed=seed)
     else:
         raise ValueError(f"Неизвестный метод: {method}. Используй 'ahc' или 'spectral'")
 
@@ -132,7 +150,7 @@ def merge_short_segments(
 
     for i, ((start, end), label) in enumerate(zip(segments, labels)):
         duration = end - start
-        if duration < min_duration and len(new_labels) > 0:
+        if duration < min_duration and len(new_labels) > 0 and start <= new_segments[-1][1]:
             prev_start, _ = new_segments[-1]
             new_segments[-1] = (prev_start, end)
         else:

@@ -1,0 +1,7 @@
+НИР.pdf
+
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+/pytest-cache-files-*/
