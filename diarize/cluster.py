@@ -1,13 +1,14 @@
 """
 cluster.py — Кластеризация эмбеддингов говорящих.
 
-Два метода:
+Methods:
     - AHC  (Agglomerative Hierarchical Clustering) — простой, быстрый
     - Spectral — кластеризация по матрице сходства
+    - NME-SC — auto-tuned spectral clustering using normalized maximum eigengap
 """
 
 import numpy
-from sklearn.cluster import AgglomerativeClustering, SpectralClustering
+from sklearn.cluster import AgglomerativeClustering, KMeans, SpectralClustering
 from sklearn.preprocessing import normalize
 from sklearn.metrics import silhouette_score
 
@@ -166,6 +167,53 @@ def cluster_spectral(
     return best_labels
 
 
+def cluster_nme_sc(
+    embeddings: numpy.ndarray,
+    n_speakers: int = None,
+    max_speakers: int = 10,
+    seed: int = 42,
+) -> numpy.ndarray:
+    """Normalized maximum eigengap spectral clustering (Park et al., 2019)."""
+    embeddings = normalize(embeddings, norm="l2")
+    n_samples = len(embeddings)
+    if n_samples < 4:
+        # The paper searches p in [1, floor(N/4)], which is empty for N < 4.
+        return cluster_ahc(embeddings, n_speakers=n_speakers, threshold=0.65)
+
+    affinity = embeddings @ embeddings.T
+    max_neighbors = max(1, n_samples // 4)
+    max_clusters = min(max_speakers, n_samples - 1)
+    best_ratio = numpy.inf
+    best_vectors = None
+    best_gaps = None
+    epsilon = 1e-10
+
+    for p in range(1, max_neighbors + 1):
+        pruned = numpy.zeros_like(affinity)
+        for row in range(n_samples):
+            neighbors = numpy.argsort(-affinity[row], kind="stable")[:p]
+            pruned[row, neighbors] = 1.0
+        adjacency = (pruned + pruned.T) / 2.0
+        laplacian = numpy.diag(adjacency.sum(axis=1)) - adjacency
+        eigenvalues, eigenvectors = numpy.linalg.eigh(laplacian)
+        eigenvalues = numpy.maximum(eigenvalues, 0.0)
+        gaps = numpy.diff(eigenvalues)[:max_clusters]
+        maximum_gap = float(gaps.max(initial=0.0))
+        normalized_gap = maximum_gap / (float(eigenvalues[-1]) + epsilon)
+        ratio = p / normalized_gap if normalized_gap > epsilon else numpy.inf
+        if best_vectors is None or ratio < best_ratio:
+            best_ratio, best_vectors, best_gaps = ratio, eigenvectors, gaps
+
+    if best_vectors is None:
+        return numpy.zeros(n_samples, dtype=int)
+    estimated = int(numpy.argmax(best_gaps) + 1) if best_gaps.max(initial=0.0) > epsilon else 1
+    k = n_speakers if n_speakers is not None else estimated
+    if k == 1:
+        return numpy.zeros(n_samples, dtype=int)
+    spectral_embedding = best_vectors[:, :k]
+    return KMeans(n_clusters=k, random_state=seed, n_init=10).fit_predict(spectral_embedding)
+
+
 def cluster_embeddings(
     embeddings: numpy.ndarray,
     method: str       = "ahc",
@@ -178,7 +226,7 @@ def cluster_embeddings(
     Кластеризация эмбеддингов говорящих.
     """
     embeddings = numpy.asarray(embeddings)
-    if method not in {"ahc", "spectral"} or max_speakers < 1:
+    if method not in {"ahc", "spectral", "nme_sc"} or max_speakers < 1:
         raise ValueError("Invalid method or max_speakers")
     if n_speakers is not None and not 1 <= n_speakers <= len(embeddings):
         raise ValueError("n_speakers must be between 1 and number of embeddings")
@@ -191,8 +239,8 @@ def cluster_embeddings(
         return numpy.zeros(len(embeddings), dtype=int)
     if n_speakers == len(embeddings):
         return numpy.arange(len(embeddings))
-    if method == "spectral" and n_speakers is None:
-        # AHC gate allows a one-speaker solution, undefined for silhouette selection.
+    if method in {"spectral", "nme_sc"} and n_speakers is None:
+        # The spectral estimators need a one-speaker/small-sample fallback.
         gate = cluster_ahc(embeddings, threshold=threshold)
         if len(set(gate)) == 1 or len(embeddings) == 2:
             return gate
@@ -203,8 +251,11 @@ def cluster_embeddings(
             labels = cluster_ahc(embeddings, n_speakers=max_speakers)
     elif method == "spectral":
         labels = cluster_spectral(embeddings, n_speakers=n_speakers, max_speakers=max_speakers, seed=seed)
+    elif method == "nme_sc":
+        labels = cluster_nme_sc(embeddings, n_speakers=n_speakers,
+                                max_speakers=max_speakers, seed=seed)
     else:
-        raise ValueError(f"Неизвестный метод: {method}. Используй 'ahc' или 'spectral'")
+        raise ValueError(f"Unknown method: {method}")
 
     n_found = len(set(labels))
     print(f"[cluster] Метод: {method}, найдено спикеров: {n_found}")

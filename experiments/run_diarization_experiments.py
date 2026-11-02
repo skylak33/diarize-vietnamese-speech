@@ -3,6 +3,8 @@ import argparse
 import csv
 import json
 import sys
+import time
+import tracemalloc
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -16,7 +18,7 @@ def configurations(args):
                 max_small_cluster_size=getattr(args, 'max_small_cluster_size', 4),
                 vad_min_silence_ms=getattr(args, 'vad_min_silence_ms', 100))
     variations = {
-        'clustering': ('method', ['ahc', 'spectral']),
+        'clustering': ('method', ['ahc', 'spectral', 'nme_sc']),
         'ahc_threshold': ('ahc_threshold', [0.65,0.70,0.75,0.80]),
         'vad_threshold': ('vad_threshold', [0.3,0.4,0.5,0.6,0.7]),
         'vad_silence': ('vad_min_silence_ms', [100,200,300]),
@@ -88,7 +90,7 @@ def main():
         parser.add_argument('--'+key, required=True)
     parser.add_argument('--model', default='exps/exp1/model/model_0034.model')
     parser.add_argument('--experiment', choices=['clustering','ahc_threshold','vad_threshold','vad_silence','window','speaker_count','centroid_merge','all'], default='clustering')
-    parser.add_argument('--method', choices=['ahc','spectral'], default='ahc')
+    parser.add_argument('--method', choices=['ahc','spectral','nme_sc'], default='ahc')
     parser.add_argument('--threshold', type=float, default=0.65)
     parser.add_argument('--vad_threshold', type=float, default=0.5)
     parser.add_argument('--vad_min_silence_ms', type=int, default=100)
@@ -145,11 +147,13 @@ def main():
               'centroid_merge','centroid_similarity_threshold','max_small_cluster_size',
               'DER','Miss','FalseAlarm','SpeakerError','SpeakerCountAccuracy','SpeakerCountMAE',
               'OverclusteringRate','UnderclusteringRate','AveragePredictedSpeakers',
-              'AverageReferenceSpeakers','config_id']
+              'AverageReferenceSpeakers','ElapsedSeconds','PeakPythonMemoryMB','config_id']
     with (out / 'results.csv').open('w', newline='', encoding='utf-8') as handle:
         writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
         for index, config in enumerate(configs):
+            started = time.perf_counter()
+            tracemalloc.start()
             config_id = f'config_{index:03d}'
             folder = out / config_id
             folder.mkdir()
@@ -185,13 +189,17 @@ def main():
             save_diagnostics([diagnostic_row(file_id, args.model, config, traces[file_id], result[file_id])
                               for file_id in sorted(audios)], folder)
             total = result['__total__']
+            _, peak_memory = tracemalloc.get_traced_memory()
+            tracemalloc.stop()
             writer.writerow({**config, 'config_id':config_id, 'DER':total['DER'],
                 'Miss':total['miss'], 'FalseAlarm':total['false_alarm'], 'SpeakerError':total['speaker_error'],
                 'SpeakerCountAccuracy':total['speaker_count_accuracy'], 'SpeakerCountMAE':total['speaker_count_mae'],
                 'OverclusteringRate':total['overclustering_rate'],
                 'UnderclusteringRate':total['underclustering_rate'],
                 'AveragePredictedSpeakers':total['average_predicted_speakers'],
-                'AverageReferenceSpeakers':total['average_reference_speakers']})
+                'AverageReferenceSpeakers':total['average_reference_speakers'],
+                'ElapsedSeconds':time.perf_counter() - started,
+                'PeakPythonMemoryMB':peak_memory / (1024 * 1024)})
             handle.flush()
             print(f"{config_id}: DER={total['DER']}")
 

@@ -30,7 +30,7 @@ def test_partition_preserves_speech_without_artificial_overlap():
     assert merge_short_segments([(0,1),(2,2.1)],np.array([0,1]))[0] == [(0,1),(2,2.1)]
 
 
-@pytest.mark.parametrize('method',['ahc','spectral'])
+@pytest.mark.parametrize('method',['ahc','spectral','nme_sc'])
 def test_deterministic_clustering(method):
     rng=np.random.default_rng(42)
     emb=np.vstack([rng.normal([1.,0.,0.],0.01,(8,3)),rng.normal([0.,1.,0.],0.01,(8,3))])

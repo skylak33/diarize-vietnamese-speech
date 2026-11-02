@@ -144,7 +144,7 @@ def main():
     parser.add_argument('--collar', type=float, default=0.25)
     parser.add_argument('--skip_overlap', action='store_true')
     parser.add_argument('--n_speakers', type=int)
-    parser.add_argument('--method', choices=['ahc','spectral'], default='ahc')
+    parser.add_argument('--method', choices=['ahc','spectral','nme_sc'], default='ahc')
     parser.add_argument('--device', choices=['auto','cpu','cuda'], default='auto')
     parser.add_argument('--seed', type=int, default=42)
     args = parser.parse_args()

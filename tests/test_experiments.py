@@ -40,6 +40,7 @@ def test_runner_outputs_and_oracle_count(tmp_path, monkeypatch):
     summary=rows[0]
     assert summary['OverclusteringRate']==summary['UnderclusteringRate']=='0.0'
     assert summary['AveragePredictedSpeakers']==summary['AverageReferenceSpeakers']=='1.0'
+    assert float(summary['ElapsedSeconds']) >= 0 and float(summary['PeakPythonMemoryMB']) >= 0
     assert (out/'experiment_manifest.json').is_file()
 
 

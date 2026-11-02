@@ -76,6 +76,12 @@ def test_vad_silence_ablation_is_independent():
     assert {(c['window_sec'],c['step_sec'],c['vad_threshold']) for c in configs} == {(1.5,.75,.5)}
 
 
+def test_clustering_ablation_includes_nme_sc():
+    args=Namespace(method='ahc',threshold=.65,vad_threshold=.5,window_sec=1.5,
+                   step_sec=None,speaker_mode='automatic',experiment='clustering')
+    assert [c['method'] for c in configurations(args)] == ['ahc','spectral','nme_sc']
+
+
 def test_training_log(tmp_path):
     p=tmp_path/'score.txt'
     p.write_text('1 epoch, LR 0.001, LOSS 2.5, ACC 30.00%\n2 epoch, LR 9.7e-4, LOSS 2.0, ACC 40.00%\n')
