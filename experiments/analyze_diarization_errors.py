@@ -7,6 +7,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+COUNT_STATUSES = {'correct_count', 'overcount', 'undercount'}
+OBSERVATIONS = {
+    'speaker_assignment', 'boundary_error', 'vad_miss', 'vad_false_alarm',
+    'possible_mixed_embedding', 'reference_issue', 'unknown',
+}
+CORRECT_COUNT_REVIEW_IDS = ('98EV6H0ZRlU', 'B5rLHPUJ8qc', 'jxTaydBnwIg', 'XSC94UbpoRQ')
+REFERENCE_REVIEW_IDS = ('C4HFERLpRfI', 'Uaq5N3FbQb4', 'ed0Vt0NxJUI')
+
 
 def _merged_intervals(segments):
     merged = []
@@ -34,8 +42,144 @@ def _overlap_duration(left, right):
     return total
 
 
+def _annotation_segments(annotation):
+    if hasattr(annotation, 'itertracks'):
+        return [(float(segment.start), float(segment.end), str(label))
+                for segment, _, label in annotation.itertracks(yield_label=True)]
+    return [(float(start), float(end), str(label)) for start, end, label in annotation]
+
+
+def _annotation_speaker_count(annotation):
+    return len({speaker for _, _, speaker in _annotation_segments(annotation)})
+
+
+def _timeline_intervals(timeline):
+    if hasattr(timeline, 'support'):
+        return [(float(segment.start), float(segment.end)) for segment in timeline.support()]
+    return [(float(start), float(end)) for start, end, *_ in timeline]
+
+
+def _active_labels(segments, start, end):
+    return sorted({label for left, right, label in segments if left < end and right > start})
+
+
+def temporal_error_intervals(reference, hypothesis, effective_uem, mapping):
+    """Describe atomic scored intervals from scorer-prepared annotations.
+
+    ``reference``, ``hypothesis`` and ``effective_uem`` must be the views returned
+    by ``eval.der.prepare_evaluation``. This function deliberately does not apply
+    collar, overlap removal, UEM cropping, or a second speaker mapping.
+    """
+    reference = _annotation_segments(reference)
+    hypothesis = _annotation_segments(hypothesis)
+    uem = _timeline_intervals(effective_uem)
+    boundaries = {point for start, end in uem for point in (start, end)}
+    for start, end, _ in reference + hypothesis:
+        for uem_start, uem_end in uem:
+            if start < uem_end and end > uem_start:
+                boundaries.update((max(start, uem_start), min(end, uem_end)))
+    boundaries = sorted(boundaries)
+    atoms = []
+    for start, end in zip(boundaries, boundaries[1:]):
+        if end <= start or not any(left <= start and end <= right for left, right in uem):
+            continue
+        ref_labels = _active_labels(reference, start, end)
+        hyp_labels = _active_labels(hypothesis, start, end)
+        mapped_labels = sorted({str(mapping.get(label, label)) for label in hyp_labels})
+        if not ref_labels and not hyp_labels:
+            continue
+        common = set(ref_labels) & set(mapped_labels)
+        components = (
+            [('correct', len(common))] if common else [])
+        components += ([('speaker_confusion', min(len(ref_labels), len(mapped_labels)) - len(common))]
+                       if min(len(ref_labels), len(mapped_labels)) > len(common) else [])
+        components += ([('missed_speech', len(ref_labels) - len(mapped_labels))]
+                       if len(ref_labels) > len(mapped_labels) else [])
+        components += ([('false_alarm', len(mapped_labels) - len(ref_labels))]
+                       if len(mapped_labels) > len(ref_labels) else [])
+        for kind, speaker_count in components:
+            atoms.append(dict(start=start, end=end, duration=end - start,
+                              speaker_seconds=(end - start) * speaker_count,
+                              speaker_count=speaker_count, kind=kind,
+                              matched_speakers=sorted(common), reference_speakers=ref_labels,
+                              hypothesis_speakers=hyp_labels,
+                              mapped_hypothesis_speakers=mapped_labels))
+
+    merged = []
+    for atom in atoms:
+        dynamic = {'start', 'end', 'duration', 'speaker_seconds'}
+        comparable = {key: value for key, value in atom.items() if key not in dynamic}
+        previous = merged[-1] if merged else None
+        previous_comparable = ({key: value for key, value in previous.items()
+                                if key not in dynamic} if previous else None)
+        if previous and abs(previous['end'] - atom['start']) < 1e-9 and comparable == previous_comparable:
+            previous['end'] = atom['end']
+            previous['duration'] = previous['end'] - previous['start']
+            previous['speaker_seconds'] = previous['duration'] * previous['speaker_count']
+        else:
+            merged.append(atom)
+    return merged
+
+
+def speaker_change_boundaries(reference, hypothesis, effective_uem, mapping, tolerance=0.25):
+    """Match reference change points to the nearest mapped-hypothesis change."""
+    if tolerance < 0:
+        raise ValueError('tolerance must be non-negative')
+    uem = _timeline_intervals(effective_uem)
+
+    def changes(annotation, label_mapping=None):
+        segments = _annotation_segments(annotation)
+        points = []
+        for point in sorted({value for start, end, _ in segments for value in (start, end)}):
+            if not any(start < point < end for start, end in uem):
+                continue
+            before = _active_labels(segments, point - 1e-7, point)
+            after = _active_labels(segments, point, point + 1e-7)
+            if label_mapping:
+                before = sorted({str(label_mapping.get(label, label)) for label in before})
+                after = sorted({str(label_mapping.get(label, label)) for label in after})
+            if before != after:
+                points.append(point)
+        return points
+
+    reference_changes = changes(reference)
+    hypothesis_changes = changes(hypothesis, mapping)
+    result = []
+    for point in reference_changes:
+        nearest = min(hypothesis_changes, key=lambda candidate: (abs(candidate - point), candidate),
+                      default=None)
+        delta = None if nearest is None else nearest - point
+        result.append(dict(reference_time=point, hypothesis_time=nearest, delta=delta,
+                           within_tolerance=delta is not None and abs(delta) <= tolerance))
+    return result
+
+
+def temporal_diagnostic(reference, hypothesis, effective_uem, mapping,
+                        long_error_threshold=2.0, boundary_tolerance=0.25):
+    """Serialize scorer-prepared views into deterministic temporal diagnostics."""
+    intervals = temporal_error_intervals(reference, hypothesis, effective_uem, mapping)
+    errors = [interval for interval in intervals if interval['kind'] != 'correct']
+    return dict(
+        effective_uem=[dict(start=start, end=end) for start, end in _timeline_intervals(effective_uem)],
+        reference_intervals=[dict(start=start, end=end, speaker=speaker)
+                             for start, end, speaker in _annotation_segments(reference)],
+        mapped_hypothesis_intervals=[
+            dict(start=start, end=end, speaker=speaker,
+                 mapped_speaker=str(mapping.get(speaker, speaker)))
+            for start, end, speaker in _annotation_segments(hypothesis)],
+        speaker_mapping={str(key): str(value) for key, value in sorted(mapping.items())},
+        intervals=intervals,
+        error_intervals=errors,
+        long_error_intervals=[interval for interval in errors
+                              if interval['duration'] >= long_error_threshold],
+        speaker_change_boundaries=speaker_change_boundaries(
+            reference, hypothesis, effective_uem, mapping, boundary_tolerance),
+    )
+
+
 def diagnostic_row(file_id, audio_duration, reference, metric, vad_segments=None,
-                   max_reference_coverage=0.5, min_vad_outside_reference_sec=5.0):
+                   max_reference_coverage=0.5, min_vad_outside_reference_sec=5.0,
+                   observations=None, temporal=None, reference_status='unverified'):
     """Build one evidence row without changing annotations or scoring."""
     reference_intervals = _merged_intervals(reference)
     reference_speech = _duration(reference_intervals)
@@ -43,6 +187,7 @@ def diagnostic_row(file_id, audio_duration, reference, metric, vad_segments=None
     last_reference = reference_intervals[-1][1] if reference_intervals else None
     relation = ('exact' if metric['N_pred'] == metric['N_ref'] else
                 'over' if metric['N_pred'] > metric['N_ref'] else 'under')
+    count_status = dict(exact='correct_count', over='overcount', under='undercount')[relation]
     speaker_error = metric['speaker_error_seconds']
     error_case = ('none' if speaker_error <= 1e-9 else
                   'timing_assignment_with_correct_count' if relation == 'exact' else
@@ -58,6 +203,11 @@ def diagnostic_row(file_id, audio_duration, reference, metric, vad_segments=None
         partial = (reference_speech / audio_duration < max_reference_coverage
                    and vad_outside_reference >= min_vad_outside_reference_sec)
 
+    observations = list(dict.fromkeys(observations or []))
+    invalid = set(observations) - OBSERVATIONS
+    if invalid:
+        raise ValueError(f'Unknown observations: {sorted(invalid)}')
+
     return dict(
         recording_id=file_id,
         audio_duration=audio_duration,
@@ -70,11 +220,15 @@ def diagnostic_row(file_id, audio_duration, reference, metric, vad_segments=None
         vad_speech_outside_reference_seconds=vad_outside_reference,
         possible_partial_reference=partial,
         n_ref=metric['N_ref'], n_pred=metric['N_pred'], count_relation=relation,
+        speaker_count_status=count_status, observations=observations,
         speaker_error_case=error_case,
         DER=metric['DER'], Miss=metric['miss'], FalseAlarm=metric['false_alarm'],
         SpeakerError=metric['speaker_error'],
         reference_speaker_seconds=metric['duration'],
         speaker_error_seconds=speaker_error,
+        error_intervals=temporal['error_intervals'] if temporal else [],
+        reference_status=reference_status,
+        temporal=temporal,
     )
 
 
@@ -109,10 +263,13 @@ def main():
     parser.add_argument('--min_vad_outside_reference_sec', type=float, default=5.0)
     parser.add_argument('--collar', type=float, default=0.25)
     parser.add_argument('--skip_overlap', action='store_true')
+    parser.add_argument('--uem')
+    parser.add_argument('--speaker_count_status', choices=sorted(COUNT_STATUSES))
+    parser.add_argument('--long_error_threshold', type=float, default=2.0)
     args = parser.parse_args()
 
     import soundfile as sf
-    from eval.der import evaluate_annotations, load_rttm
+    from eval.der import evaluate_annotations, load_rttm, prepare_evaluation
 
     references = load_rttm(args.ref_rttm_dir)
     hypotheses = load_rttm(args.hyp_rttm_dir, allow_empty=True)
@@ -125,8 +282,17 @@ def main():
     durations = {file_id: sf.info(audios[file_id]).duration for file_id in selected}
     subset_references = {file_id: references[file_id] for file_id in selected}
     subset_hypotheses = {file_id: hypotheses.get(file_id, []) for file_id in selected}
-    metrics = evaluate_annotations(subset_references, subset_hypotheses, args.collar,
-                                   args.skip_overlap, durations)
+    uem = None
+    if args.uem:
+        from eval.der import load_uem
+        loaded_uem = load_uem(args.uem)
+        missing_uem = set(selected) - loaded_uem.keys()
+        if missing_uem:
+            parser.error(f'Missing UEM IDs: {sorted(missing_uem)}')
+        uem = {file_id: loaded_uem[file_id] for file_id in selected}
+    metrics = evaluate_annotations(subset_references, subset_hypotheses, collar=args.collar,
+                                   skip_overlap=args.skip_overlap, durations=durations,
+                                   uem_data=uem)
 
     vad = {}
     if args.run_vad:
@@ -135,10 +301,25 @@ def main():
             vad[file_id] = get_speech_segments(
                 str(audios[file_id]), threshold=args.vad_threshold,
                 min_silence_ms=args.vad_min_silence_ms)
-    rows = [diagnostic_row(
-        file_id, durations[file_id], references[file_id], metrics[file_id], vad.get(file_id),
-        args.max_reference_coverage, args.min_vad_outside_reference_sec)
-        for file_id in selected]
+    rows = []
+    for file_id in selected:
+        prepared = prepare_evaluation(
+            file_id, references[file_id], hypotheses.get(file_id, []), args.collar,
+            args.skip_overlap, None if uem is None else uem[file_id],
+            duration=durations[file_id])
+        temporal = temporal_diagnostic(*prepared, long_error_threshold=args.long_error_threshold,
+                                       boundary_tolerance=args.collar)
+        metric = metrics[file_id]
+        if uem is not None:
+            metric = dict(metric, N_ref=_annotation_speaker_count(prepared[0]),
+                          N_pred=_annotation_speaker_count(prepared[1]))
+        row = diagnostic_row(
+            file_id, durations[file_id], references[file_id], metric, vad.get(file_id),
+            args.max_reference_coverage, args.min_vad_outside_reference_sec, temporal=temporal)
+        if args.speaker_count_status is None or row['speaker_count_status'] == args.speaker_count_status:
+            rows.append(row)
+    if not rows:
+        parser.error('No recordings match the requested speaker-count status')
     payload = dict(
         protocol=dict(collar=args.collar, skip_overlap=args.skip_overlap,
                       vad_enabled=args.run_vad, vad_threshold=args.vad_threshold,
