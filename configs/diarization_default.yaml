@@ -1,4 +1,3 @@
-# Documented CLI recipe; YAML is not automatically loaded.
 sample_rate: 16000
 embedding:
   window_sec: 1.5
@@ -13,6 +12,12 @@ clustering:
   method: ahc
   threshold: 0.65
   max_speakers: 10
+postprocessing:
+  centroid_merge:
+    enabled: false
+    similarity_threshold: 0.80
+    max_small_cluster_size: 4
+    similarity_margin: 0.05
 evaluation:
   collar: 0.25
   skip_overlap: false

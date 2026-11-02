@@ -6,6 +6,7 @@ pipeline.py — Полный пайплайн диаризации говоря�
 import os
 import sys
 import argparse
+import json
 from pathlib import Path
 
 import numpy
@@ -18,7 +19,10 @@ from models.ecapa_tdnn import ECAPA_TDNN
 from utils.model import load_model
 from utils.seed import set_seed
 from diarize.vad import load_audio, get_speech_segments
-from diarize.cluster import cluster_embeddings, merge_short_segments, smooth_labels
+from diarize.cluster import (cluster_embeddings, merge_short_segments,
+                             merge_similar_clusters, smooth_labels)
+from diarize.config import (load_config, pipeline_kwargs, set_config_value,
+                            validate_config)
 
 SAMPLE_RATE = 16000
 
@@ -137,39 +141,90 @@ def diarize(
     encoder=None,
     min_segment_sec: float = 0.5,
     diagnostics: dict | None = None,
+    centroid_merge: bool = False,
+    centroid_similarity_threshold: float = 0.80,
+    max_small_cluster_size: int = 4,
+    centroid_similarity_margin: float = 0.05,
+    vad_min_silence_ms: int = 100,
+    vad_min_speech_ms: int = 250,
+    vad_speech_pad_ms: int = 30,
+    embedding_cache: dict | None = None,
 ) -> str:
     set_seed(seed)
     if diagnostics is not None:
         diagnostics.update(requested_n_speakers=n_speakers, n_embedding_windows=0,
                            n_clusters_before_postprocess=0, n_speakers_after_postprocess=0,
-                           cluster_sizes=[])
+                           cluster_sizes=[], n_clusters_before_postmerge=0,
+                           n_clusters_after_postmerge=0,
+                           cluster_sizes_before_postmerge=[],
+                           cluster_sizes_after_postmerge=[], merge_attempts=0,
+                           accepted_merges=0, rejected_merges=0,
+                           merge_similarity_scores=[],
+                           merge_candidates=[], merge_rejection_reasons={},
+                           embedding_cache_hit=False,
+                           centroid_merge_requested=centroid_merge,
+                           centroid_merge_skipped_known_count=False)
     if not 0 < step_sec <= window_sec or not 0 <= vad_threshold <= 1:
         raise ValueError("Require 0 < step_sec <= window_sec and 0 <= vad_threshold <= 1")
+    if not isinstance(vad_min_silence_ms, int) or vad_min_silence_ms <= 0:
+        raise ValueError("vad_min_silence_ms must be a positive integer")
+    if not isinstance(vad_min_speech_ms, int) or vad_min_speech_ms <= 0:
+        raise ValueError("vad_min_speech_ms must be a positive integer")
+    if not isinstance(vad_speech_pad_ms, int) or vad_speech_pad_ms < 0:
+        raise ValueError("vad_speech_pad_ms must be a non-negative integer")
     if output_rttm:
         Path(output_rttm).parent.mkdir(parents=True, exist_ok=True)
         Path(output_rttm).write_text("", encoding="utf-8")
-    print(f"\n[diarize] === Шаг 1: Загрузка аудио ===")
-    audio, sr = load_audio(audio_path)
-    duration = len(audio) / sr
-    if duration == 0:
-        raise ValueError(f"Empty audio: {audio_path}")
-    print(f"[diarize] Файл: {audio_path}, длительность: {duration:.1f} сек")
+    cache_key = cached = None
+    if embedding_cache is not None:
+        audio_file = Path(audio_path)
+        audio_stat = audio_file.stat()
+        model_file = Path(model_path)
+        model_stat = model_file.stat() if model_file.is_file() else None
+        cache_key = (
+            str(audio_file.resolve()), audio_stat.st_size, audio_stat.st_mtime_ns,
+            str(model_file.resolve()), model_stat.st_size if model_stat else None,
+            model_stat.st_mtime_ns if model_stat else None,
+            id(encoder) if encoder is not None else None,
+            vad_threshold, vad_min_speech_ms, vad_min_silence_ms, vad_speech_pad_ms,
+            window_sec, step_sec, min_segment_sec, device, seed,
+        )
+        cached = embedding_cache.get(cache_key)
+    if cached is not None:
+        duration, speech_total, sub_segs, embeddings = cached
+        sub_segs, embeddings = list(sub_segs), embeddings.copy()
+        if diagnostics is not None:
+            diagnostics['embedding_cache_hit'] = True
+        print(f"\n[diarize] Embedding cache hit: {audio_path}")
+    else:
+        print(f"\n[diarize] === Шаг 1: Загрузка аудио ===")
+        audio, sr = load_audio(audio_path)
+        duration = len(audio) / sr
+        if duration == 0:
+            raise ValueError(f"Empty audio: {audio_path}")
+        print(f"[diarize] Файл: {audio_path}, длительность: {duration:.1f} сек")
 
-    print(f"\n[diarize] === Шаг 2: VAD ===")
-    speech_segments = get_speech_segments(audio_path, threshold=vad_threshold, return_seconds=True)
-    speech_total = sum(e - s for s, e in speech_segments)
-    print(f"[diarize] Речевых сегментов: {len(speech_segments)}, "
-          f"суммарно: {speech_total:.1f} сек ({100*speech_total/duration:.0f}%)")
-    if not speech_segments:
-        if n_speakers is not None:
-            raise ValueError(f"{audio_path}: requested {n_speakers} speakers, but VAD found no speech")
-        print("[diarize] Речь не обнаружена.")
-        return ""
+        print(f"\n[diarize] === Шаг 2: VAD ===")
+        speech_segments = get_speech_segments(audio_path, threshold=vad_threshold,
+                                              min_speech_ms=vad_min_speech_ms,
+                                              min_silence_ms=vad_min_silence_ms,
+                                              speech_pad_ms=vad_speech_pad_ms,
+                                              return_seconds=True)
+        speech_total = sum(e - s for s, e in speech_segments)
+        print(f"[diarize] Речевых сегментов: {len(speech_segments)}, "
+              f"суммарно: {speech_total:.1f} сек ({100*speech_total/duration:.0f}%)")
+        if not speech_segments:
+            if n_speakers is not None:
+                raise ValueError(f"{audio_path}: requested {n_speakers} speakers, but VAD found no speech")
+            print("[diarize] Речь не обнаружена.")
+            return ""
 
-    print(f"\n[diarize] === Шаг 3: Извлечение эмбеддингов ===")
-    encoder = encoder if encoder is not None else load_model(model_path, device)
-    sub_segs, embeddings = extract_embeddings_for_segments(
-        encoder, audio, speech_segments, window_sec, step_sec, min_segment_sec)
+        print(f"\n[diarize] === Шаг 3: Извлечение эмбеддингов ===")
+        encoder = encoder if encoder is not None else load_model(model_path, device)
+        sub_segs, embeddings = extract_embeddings_for_segments(
+            encoder, audio, speech_segments, window_sec, step_sec, min_segment_sec)
+        if embedding_cache is not None and len(embeddings):
+            embedding_cache[cache_key] = (duration, speech_total, tuple(sub_segs), embeddings.copy())
     if diagnostics is not None:
         diagnostics['n_embedding_windows'] = len(embeddings)
     if n_speakers is not None and not 1 <= n_speakers <= len(embeddings):
@@ -186,8 +241,25 @@ def diarize(
     if n_speakers is not None and n_clusters != n_speakers:
         raise RuntimeError(f"{audio_path}: expected {n_speakers} clusters, got {n_clusters}")
     if diagnostics is not None:
+        sizes = numpy.unique(labels, return_counts=True)[1].tolist()
         diagnostics.update(n_clusters_before_postprocess=n_clusters,
-                           cluster_sizes=numpy.unique(labels, return_counts=True)[1].tolist())
+                           cluster_sizes=sizes,
+                           n_clusters_before_postmerge=n_clusters,
+                           n_clusters_after_postmerge=n_clusters,
+                           cluster_sizes_before_postmerge=sizes,
+                           cluster_sizes_after_postmerge=sizes)
+
+    if centroid_merge and n_speakers is None:
+        labels, merge_diagnostics = merge_similar_clusters(
+            embeddings, labels, centroid_similarity_threshold, max_small_cluster_size,
+            centroid_similarity_margin, return_diagnostics=True)
+        if diagnostics is not None:
+            sizes_after = numpy.unique(labels, return_counts=True)[1].tolist()
+            diagnostics.update(merge_diagnostics,
+                               n_clusters_after_postmerge=len(set(labels)),
+                               cluster_sizes_after_postmerge=sizes_after)
+    elif centroid_merge and diagnostics is not None:
+        diagnostics['centroid_merge_skipped_known_count'] = True
 
     print(f"\n[diarize] === Шаг 5: Постобработка ===")
     labels = smooth_labels(sub_segs, labels, window=3)
@@ -209,22 +281,62 @@ def diarize(
     return rttm_str
 
 
-if __name__ == "__main__":
+def parse_cli_args(argv=None):
     parser = argparse.ArgumentParser(description="ECAPA-TDNN Speaker Diarization")
     parser.add_argument("audio",             type=str)
     parser.add_argument("--model",           type=str, required=True)
-    parser.add_argument("--n_speakers",      type=int, default=None)
-    parser.add_argument("--method",          type=str, default="ahc",
-                        choices=["ahc", "spectral"])
-    parser.add_argument("--threshold",       type=float, default=0.65)
-    parser.add_argument("--vad_threshold",   type=float, default=0.5)
-    parser.add_argument("--output",          type=str, default=None)
-    parser.add_argument("--window_sec", type=float, default=1.5)
-    parser.add_argument("--step_sec", type=float, default=0.75)
-    parser.add_argument("--device", choices=["auto", "cuda", "cpu"], default="auto")
-    parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--max_speakers", type=int, default=10)
-    args = parser.parse_args()
+    parser.add_argument("--config")
+    parser.add_argument("--n_speakers",      type=int)
+    parser.add_argument("--method",          type=str, default=argparse.SUPPRESS,
+                        choices=["ahc", "spectral", "nme_sc"])
+    parser.add_argument("--threshold", type=float, default=argparse.SUPPRESS)
+    parser.add_argument("--vad_threshold", type=float, default=argparse.SUPPRESS)
+    parser.add_argument("--vad_min_speech_ms", type=int, default=argparse.SUPPRESS)
+    parser.add_argument("--vad_min_silence_ms", type=int, default=argparse.SUPPRESS)
+    parser.add_argument("--vad_speech_pad_ms", type=int, default=argparse.SUPPRESS)
+    parser.add_argument("--output", type=str)
+    parser.add_argument("--window_sec", type=float, default=argparse.SUPPRESS)
+    parser.add_argument("--step_sec", type=float, default=argparse.SUPPRESS)
+    parser.add_argument("--min_segment_sec", type=float, default=argparse.SUPPRESS)
+    parser.add_argument("--device", choices=["auto", "cuda", "cpu"], default=argparse.SUPPRESS)
+    parser.add_argument("--seed", type=int, default=argparse.SUPPRESS)
+    parser.add_argument("--max_speakers", type=int, default=argparse.SUPPRESS)
+    merge_group = parser.add_mutually_exclusive_group()
+    merge_group.add_argument("--centroid_merge", dest="centroid_merge", action="store_true",
+                             default=argparse.SUPPRESS)
+    merge_group.add_argument("--no_centroid_merge", dest="centroid_merge", action="store_false",
+                             default=argparse.SUPPRESS)
+    parser.add_argument("--centroid_similarity_threshold", type=float, default=argparse.SUPPRESS)
+    parser.add_argument("--max_small_cluster_size", type=int, default=argparse.SUPPRESS)
+    parser.add_argument("--centroid_similarity_margin", type=float, default=argparse.SUPPRESS)
+    args = parser.parse_args(argv)
+    config = load_config(args.config)
+    paths = {
+        'method': 'clustering.method', 'threshold': 'clustering.threshold',
+        'max_speakers': 'clustering.max_speakers', 'window_sec': 'embedding.window_sec',
+        'step_sec': 'embedding.step_sec', 'min_segment_sec': 'embedding.min_segment_sec',
+        'vad_threshold': 'vad.threshold', 'vad_min_speech_ms': 'vad.min_speech_ms',
+        'vad_min_silence_ms': 'vad.min_silence_ms', 'vad_speech_pad_ms': 'vad.speech_pad_ms',
+        'centroid_merge': 'postprocessing.centroid_merge.enabled',
+        'centroid_similarity_threshold': 'postprocessing.centroid_merge.similarity_threshold',
+        'max_small_cluster_size': 'postprocessing.centroid_merge.max_small_cluster_size',
+        'centroid_similarity_margin': 'postprocessing.centroid_merge.similarity_margin',
+        'seed': 'seed', 'device': 'device',
+    }
+    for name, path in paths.items():
+        if hasattr(args, name):
+            set_config_value(config, path, getattr(args, name))
+    validate_config(config)
+    effective = argparse.Namespace(audio=args.audio, model=args.model,
+        config=args.config, n_speakers=args.n_speakers, output=args.output,
+        **pipeline_kwargs(config))
+    return effective, config
+
+
+if __name__ == "__main__":
+    args, effective_config = parse_cli_args()
+    print("[diarize] Effective configuration:")
+    print(json.dumps(effective_config, indent=2))
 
     rttm = diarize(
         audio_path=args.audio,
@@ -233,9 +345,17 @@ if __name__ == "__main__":
         method=args.method,
         threshold=args.threshold,
         vad_threshold=args.vad_threshold,
+        vad_min_silence_ms=args.vad_min_silence_ms,
         output_rttm=args.output,
         window_sec=args.window_sec, step_sec=args.step_sec,
         device=args.device, seed=args.seed, max_speakers=args.max_speakers,
+        centroid_merge=args.centroid_merge,
+        centroid_similarity_threshold=args.centroid_similarity_threshold,
+        max_small_cluster_size=args.max_small_cluster_size,
+        centroid_similarity_margin=args.centroid_similarity_margin,
+        min_segment_sec=args.min_segment_sec,
+        vad_min_speech_ms=args.vad_min_speech_ms,
+        vad_speech_pad_ms=args.vad_speech_pad_ms,
     )
     print("\n=== RTTM ===")
     print(rttm)

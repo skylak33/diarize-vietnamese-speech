@@ -41,6 +41,10 @@ def get_speech_segments(
     """
     Найти речевые сегменты в аудиофайле.
     """
+    if not 0 <= threshold <= 1:
+        raise ValueError("threshold must be between 0 and 1")
+    if min_speech_ms <= 0 or min_silence_ms <= 0 or speech_pad_ms < 0:
+        raise ValueError("VAD durations must be positive, with non-negative speech_pad_ms")
     from silero_vad import load_silero_vad, get_speech_timestamps
 
     model = load_silero_vad()

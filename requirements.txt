@@ -14,3 +14,4 @@ silero-vad>=5.1,<7
 pyannote.core>=5,<7
 pyannote.metrics>=3.2,<5
 matplotlib>=3.8,<4
+PyYAML>=6,<7

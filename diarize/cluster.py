@@ -1,15 +1,110 @@
 """
 cluster.py — Кластеризация эмбеддингов говорящих.
 
-Два метода:
+Methods:
     - AHC  (Agglomerative Hierarchical Clustering) — простой, быстрый
     - Spectral — кластеризация по матрице сходства
+    - NME-SC — auto-tuned spectral clustering using normalized maximum eigengap
 """
 
 import numpy
-from sklearn.cluster import AgglomerativeClustering, SpectralClustering
+from sklearn.cluster import AgglomerativeClustering, KMeans, SpectralClustering
 from sklearn.preprocessing import normalize
 from sklearn.metrics import silhouette_score
+
+
+def merge_similar_clusters(
+    embeddings: numpy.ndarray,
+    labels: numpy.ndarray,
+    similarity_threshold: float = 0.80,
+    max_small_cluster_size: int = 4,
+    min_similarity_margin: float = 0.05,
+    return_diagnostics: bool = False,
+):
+    """Merge a small cluster into a clearly similar, strictly larger cluster."""
+    embeddings = numpy.asarray(embeddings)
+    labels = numpy.asarray(labels)
+    diagnostics = dict(merge_attempts=0, accepted_merges=0, rejected_merges=0,
+                       merge_similarity_scores=[], merge_candidates=[],
+                       merge_rejection_reasons={})
+    if not -1 <= similarity_threshold <= 1:
+        raise ValueError("similarity_threshold must be between -1 and 1")
+    if max_small_cluster_size < 1:
+        raise ValueError("max_small_cluster_size must be positive")
+    if not 0 <= min_similarity_margin <= 2:
+        raise ValueError("min_similarity_margin must be between 0 and 2")
+    if len(embeddings) != len(labels):
+        raise ValueError("embeddings and labels must have equal length")
+    if len(embeddings) == 0:
+        result = numpy.array([], dtype=int)
+        return (result, diagnostics) if return_diagnostics else result
+    if embeddings.ndim != 2 or labels.ndim != 1:
+        raise ValueError("embeddings must be 2-D and labels must be 1-D")
+    if (not numpy.isfinite(embeddings).all()
+            or (numpy.linalg.norm(embeddings, axis=1) == 0).any()):
+        raise ValueError("Embeddings must be finite nonzero vectors")
+
+    result = labels.copy()
+    while True:
+        unique, counts = numpy.unique(result, return_counts=True)
+        if len(unique) < 2:
+            break
+        sizes = dict(zip(unique.tolist(), counts.tolist()))
+        merged = False
+        for fragment in sorted(unique, key=lambda label: (sizes[label], label)):
+            if sizes[fragment] > max_small_cluster_size:
+                continue
+            targets = [label for label in unique if sizes[label] > sizes[fragment]]
+            if not targets:
+                continue
+            fragment_centroid = embeddings[result == fragment].mean(axis=0)
+            target_centroids = numpy.vstack([embeddings[result == label].mean(axis=0)
+                                             for label in targets])
+            fragment_norm = numpy.linalg.norm(fragment_centroid)
+            target_norms = numpy.linalg.norm(target_centroids, axis=1)
+            diagnostics['merge_attempts'] += 1
+            if fragment_norm == 0 or (target_norms == 0).any():
+                diagnostics['merge_similarity_scores'].append(None)
+                diagnostics['merge_candidates'].append(dict(
+                    fragment_label=int(fragment), fragment_size=sizes[fragment],
+                    target_similarities=[], accepted=False,
+                    rejection_reasons=['invalid_centroid']))
+                diagnostics['merge_rejection_reasons']['invalid_centroid'] = (
+                    diagnostics['merge_rejection_reasons'].get('invalid_centroid', 0) + 1)
+                diagnostics['rejected_merges'] += 1
+                continue
+            similarities = target_centroids @ fragment_centroid / (target_norms * fragment_norm)
+            order = numpy.argsort(-similarities, kind='stable')
+            best_index = int(order[0])
+            best = float(similarities[best_index])
+            second = float(similarities[order[1]]) if len(order) > 1 else -1.0
+            diagnostics['merge_similarity_scores'].append(best)
+            reasons = []
+            if best < similarity_threshold:
+                reasons.append('below_similarity_threshold')
+            if best - second < min_similarity_margin:
+                reasons.append('insufficient_similarity_margin')
+            diagnostics['merge_candidates'].append(dict(
+                fragment_label=int(fragment), fragment_size=sizes[fragment],
+                target_similarities=[dict(target_label=int(label), target_size=sizes[label],
+                                          similarity=float(similarity))
+                                     for label, similarity in zip(targets, similarities)],
+                best_target_label=int(targets[best_index]), best_similarity=best,
+                second_best_similarity=second, similarity_margin=best - second,
+                accepted=not reasons, rejection_reasons=reasons))
+            if not reasons:
+                result[result == fragment] = targets[best_index]
+                diagnostics['accepted_merges'] += 1
+                merged = True
+                break
+            for reason in reasons:
+                diagnostics['merge_rejection_reasons'][reason] = (
+                    diagnostics['merge_rejection_reasons'].get(reason, 0) + 1)
+            diagnostics['rejected_merges'] += 1
+        if not merged:
+            break
+
+    return (result, diagnostics) if return_diagnostics else result
 
 def cluster_ahc(
     embeddings: numpy.ndarray,
@@ -88,6 +183,65 @@ def cluster_spectral(
     return best_labels
 
 
+def cluster_nme_sc(
+    embeddings: numpy.ndarray,
+    n_speakers: int = None,
+    max_speakers: int = 10,
+    seed: int = 42,
+) -> numpy.ndarray:
+    """Normalized maximum eigengap spectral clustering (Park et al., 2019)."""
+    embeddings = normalize(embeddings, norm="l2")
+    n_samples = len(embeddings)
+    if n_speakers == n_samples:
+        return numpy.arange(n_samples)
+    if n_samples < 4:
+        # The paper searches p in [1, floor(N/4)], which is empty for N < 4.
+        return cluster_ahc(embeddings, n_speakers=n_speakers, threshold=0.65)
+
+    affinity = embeddings @ embeddings.T
+    max_neighbors = max(1, n_samples // 4)
+    max_clusters = min(max_speakers, n_samples - 1)
+    gap_limit = (max_clusters if n_speakers is None
+                 else min(n_samples - 1, max(max_clusters, n_speakers)))
+    best_ratio = numpy.inf
+    best_vectors = None
+    best_gaps = None
+    epsilon = 1e-10
+
+    for p in range(1, max_neighbors + 1):
+        pruned = numpy.zeros_like(affinity)
+        for row in range(n_samples):
+            neighbors = numpy.argsort(-affinity[row], kind="stable")[:p]
+            pruned[row, neighbors] = 1.0
+        adjacency = (pruned + pruned.T) / 2.0
+        laplacian = numpy.diag(adjacency.sum(axis=1)) - adjacency
+        eigenvalues, eigenvectors = numpy.linalg.eigh(laplacian)
+        eigenvalues = numpy.maximum(eigenvalues, 0.0)
+        gaps = numpy.diff(eigenvalues)[:gap_limit]
+        candidate_gap = (float(gaps.max(initial=0.0)) if n_speakers is None
+                         else float(gaps[n_speakers - 1]))
+        if (n_speakers is not None
+                and (not numpy.isfinite(candidate_gap) or candidate_gap <= epsilon)):
+            continue
+        normalized_gap = candidate_gap / (float(eigenvalues[-1]) + epsilon)
+        ratio = p / normalized_gap if normalized_gap > epsilon else numpy.inf
+        if n_speakers is not None and not numpy.isfinite(ratio):
+            continue
+        if best_vectors is None or ratio < best_ratio:
+            best_ratio, best_vectors, best_gaps = ratio, eigenvectors, gaps
+
+    if best_vectors is None:
+        if n_speakers is not None:
+            return cluster_ahc(embeddings, n_speakers=n_speakers)
+        return numpy.zeros(n_samples, dtype=int)
+    estimated = int(numpy.argmax(best_gaps) + 1) if best_gaps.max(initial=0.0) > epsilon else 1
+    k = n_speakers if n_speakers is not None else estimated
+    if k == 1:
+        return numpy.zeros(n_samples, dtype=int)
+    spectral_embedding = best_vectors[:, :k]
+    return KMeans(n_clusters=k, random_state=seed, n_init=10).fit_predict(spectral_embedding)
+
+
 def cluster_embeddings(
     embeddings: numpy.ndarray,
     method: str       = "ahc",
@@ -100,7 +254,7 @@ def cluster_embeddings(
     Кластеризация эмбеддингов говорящих.
     """
     embeddings = numpy.asarray(embeddings)
-    if method not in {"ahc", "spectral"} or max_speakers < 1:
+    if method not in {"ahc", "spectral", "nme_sc"} or max_speakers < 1:
         raise ValueError("Invalid method or max_speakers")
     if n_speakers is not None and not 1 <= n_speakers <= len(embeddings):
         raise ValueError("n_speakers must be between 1 and number of embeddings")
@@ -113,8 +267,8 @@ def cluster_embeddings(
         return numpy.zeros(len(embeddings), dtype=int)
     if n_speakers == len(embeddings):
         return numpy.arange(len(embeddings))
-    if method == "spectral" and n_speakers is None:
-        # AHC gate allows a one-speaker solution, undefined for silhouette selection.
+    if method in {"spectral", "nme_sc"} and n_speakers is None:
+        # The spectral estimators need a one-speaker/small-sample fallback.
         gate = cluster_ahc(embeddings, threshold=threshold)
         if len(set(gate)) == 1 or len(embeddings) == 2:
             return gate
@@ -125,8 +279,11 @@ def cluster_embeddings(
             labels = cluster_ahc(embeddings, n_speakers=max_speakers)
     elif method == "spectral":
         labels = cluster_spectral(embeddings, n_speakers=n_speakers, max_speakers=max_speakers, seed=seed)
+    elif method == "nme_sc":
+        labels = cluster_nme_sc(embeddings, n_speakers=n_speakers,
+                                max_speakers=max_speakers, seed=seed)
     else:
-        raise ValueError(f"Неизвестный метод: {method}. Используй 'ahc' или 'spectral'")
+        raise ValueError(f"Unknown method: {method}")
 
     n_found = len(set(labels))
     print(f"[cluster] Метод: {method}, найдено спикеров: {n_found}")

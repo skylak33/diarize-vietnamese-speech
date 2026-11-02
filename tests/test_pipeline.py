@@ -3,8 +3,10 @@ import numpy as np
 import pytest
 import torch
 from utils.seed import set_seed
+from diarize import pipeline
 from diarize.cluster import cluster_embeddings, merge_short_segments, smooth_labels
 from diarize.pipeline import merge_consecutive_segments, partition_overlapping_windows, extract_embeddings_for_segments
+from diarize.vad import get_speech_segments
 
 
 def test_seed_reproducibility():
@@ -28,7 +30,7 @@ def test_partition_preserves_speech_without_artificial_overlap():
     assert merge_short_segments([(0,1),(2,2.1)],np.array([0,1]))[0] == [(0,1),(2,2.1)]
 
 
-@pytest.mark.parametrize('method',['ahc','spectral'])
+@pytest.mark.parametrize('method',['ahc','spectral','nme_sc'])
 def test_deterministic_clustering(method):
     rng=np.random.default_rng(42)
     emb=np.vstack([rng.normal([1.,0.,0.],0.01,(8,3)),rng.normal([0.,1.,0.],0.01,(8,3))])
@@ -44,6 +46,17 @@ def test_bad_window():
         extract_embeddings_for_segments(None,np.zeros(16000),[(0,1)],step_sec=0)
 
 
+def test_windowing_keeps_final_coverage_and_short_region_policy(monkeypatch):
+    monkeypatch.setattr('diarize.pipeline.extract_embedding',
+                        lambda encoder, audio, start, end: np.array([start, end]))
+    audio=np.zeros(4*16000)
+    segments,embeddings=extract_embeddings_for_segments(None,audio,[(0,4)],window_sec=3,step_sec=1.5)
+    assert segments == [(0.,3.),(1.,4.)]
+    assert embeddings.shape == (2,2)
+    short,short_embeddings=extract_embeddings_for_segments(None,audio,[(0,.49)],min_segment_sec=.5)
+    assert short == [] and len(short_embeddings) == 0
+
+
 def test_postprocessing_rejects_misaligned_inputs():
     with pytest.raises(ValueError,match='equal length'):
         merge_short_segments([(0,1)],np.array([]))
@@ -51,3 +64,41 @@ def test_postprocessing_rejects_misaligned_inputs():
         smooth_labels([(0,1)],np.array([]))
     with pytest.raises(ValueError,match='positive odd'):
         smooth_labels([],np.array([]),window=2)
+
+
+def test_vad_min_silence_propagation_and_validation(monkeypatch):
+    monkeypatch.setattr(pipeline,'load_audio',lambda _: (np.zeros(16000),16000))
+    received={}
+    def fake_vad(*args,**kwargs):
+        received.update(kwargs)
+        return []
+    monkeypatch.setattr(pipeline,'get_speech_segments',fake_vad)
+    assert pipeline.diarize('sample.wav','unused',encoder=object(),vad_min_silence_ms=200) == ''
+    assert received['min_silence_ms'] == 200
+    assert received['min_speech_ms'] == 250 and received['speech_pad_ms'] == 30
+    with pytest.raises(ValueError,match='positive integer'):
+        pipeline.diarize('sample.wav','unused',encoder=object(),vad_min_silence_ms=0)
+    with pytest.raises(ValueError,match='VAD durations'):
+        get_speech_segments('unused',min_silence_ms=0)
+
+
+def test_embedding_cache_reuses_only_compatible_extraction(tmp_path, monkeypatch):
+    audio_path=tmp_path/'sample.wav'; audio_path.write_bytes(b'fixture')
+    calls={'extract':0}
+    monkeypatch.setattr(pipeline,'load_audio',lambda _: (np.zeros(16000),16000))
+    monkeypatch.setattr(pipeline,'get_speech_segments',lambda *args,**kwargs:[(0,1)])
+    def fake_extract(*args,**kwargs):
+        calls['extract']+=1
+        return [(0,1)],np.array([[1.,0.]])
+    monkeypatch.setattr(pipeline,'extract_embeddings_for_segments',fake_extract)
+    cache={}; first={}; second={}; changed={}; encoder=object()
+    pipeline.diarize(str(audio_path),'unused',encoder=encoder,embedding_cache=cache,
+                     diagnostics=first)
+    pipeline.diarize(str(audio_path),'unused',encoder=encoder,embedding_cache=cache,
+                     diagnostics=second)
+    pipeline.diarize(str(audio_path),'unused',encoder=encoder,embedding_cache=cache,
+                     diagnostics=changed,vad_threshold=.6)
+    assert calls['extract']==2
+    assert first['embedding_cache_hit'] is False
+    assert second['embedding_cache_hit'] is True
+    assert changed['embedding_cache_hit'] is False
