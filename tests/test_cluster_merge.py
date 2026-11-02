@@ -11,6 +11,8 @@ def test_merges_small_fragment_of_same_speaker():
                                             .95, return_diagnostics=True)
     assert labels.tolist() == [0] * 8
     assert trace['merge_attempts'] == trace['accepted_merges'] == 1
+    assert trace['merge_candidates'][0]['accepted'] is True
+    assert len(trace['merge_candidates'][0]['target_similarities']) == 1
 
 
 def test_different_and_small_legitimate_speakers_remain_separate():
@@ -19,6 +21,8 @@ def test_different_and_small_legitimate_speakers_remain_separate():
                                             .80, return_diagnostics=True)
     assert labels.tolist() == [0] * 6 + [1] * 2
     assert trace['rejected_merges'] == 1
+    assert trace['merge_rejection_reasons'] == {'below_similarity_threshold': 1}
+    assert trace['merge_candidates'][0]['best_similarity'] < .99
 
 
 def test_selects_clear_best_of_multiple_targets():

@@ -159,6 +159,7 @@ def diarize(
                            cluster_sizes_after_postmerge=[], merge_attempts=0,
                            accepted_merges=0, rejected_merges=0,
                            merge_similarity_scores=[],
+                           merge_candidates=[], merge_rejection_reasons={},
                            centroid_merge_requested=centroid_merge,
                            centroid_merge_skipped_known_count=False)
     if not 0 < step_sec <= window_sec or not 0 <= vad_threshold <= 1:

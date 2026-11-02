@@ -25,7 +25,8 @@ def merge_similar_clusters(
     embeddings = numpy.asarray(embeddings)
     labels = numpy.asarray(labels)
     diagnostics = dict(merge_attempts=0, accepted_merges=0, rejected_merges=0,
-                       merge_similarity_scores=[])
+                       merge_similarity_scores=[], merge_candidates=[],
+                       merge_rejection_reasons={})
     if not -1 <= similarity_threshold <= 1:
         raise ValueError("similarity_threshold must be between -1 and 1")
     if max_small_cluster_size < 1:
@@ -64,6 +65,12 @@ def merge_similar_clusters(
             diagnostics['merge_attempts'] += 1
             if fragment_norm == 0 or (target_norms == 0).any():
                 diagnostics['merge_similarity_scores'].append(None)
+                diagnostics['merge_candidates'].append(dict(
+                    fragment_label=int(fragment), fragment_size=sizes[fragment],
+                    target_similarities=[], accepted=False,
+                    rejection_reasons=['invalid_centroid']))
+                diagnostics['merge_rejection_reasons']['invalid_centroid'] = (
+                    diagnostics['merge_rejection_reasons'].get('invalid_centroid', 0) + 1)
                 diagnostics['rejected_merges'] += 1
                 continue
             similarities = target_centroids @ fragment_centroid / (target_norms * fragment_norm)
@@ -72,11 +79,27 @@ def merge_similar_clusters(
             best = float(similarities[best_index])
             second = float(similarities[order[1]]) if len(order) > 1 else -1.0
             diagnostics['merge_similarity_scores'].append(best)
-            if best >= similarity_threshold and best - second >= min_similarity_margin:
+            reasons = []
+            if best < similarity_threshold:
+                reasons.append('below_similarity_threshold')
+            if best - second < min_similarity_margin:
+                reasons.append('insufficient_similarity_margin')
+            diagnostics['merge_candidates'].append(dict(
+                fragment_label=int(fragment), fragment_size=sizes[fragment],
+                target_similarities=[dict(target_label=int(label), target_size=sizes[label],
+                                          similarity=float(similarity))
+                                     for label, similarity in zip(targets, similarities)],
+                best_target_label=int(targets[best_index]), best_similarity=best,
+                second_best_similarity=second, similarity_margin=best - second,
+                accepted=not reasons, rejection_reasons=reasons))
+            if not reasons:
                 result[result == fragment] = targets[best_index]
                 diagnostics['accepted_merges'] += 1
                 merged = True
                 break
+            for reason in reasons:
+                diagnostics['merge_rejection_reasons'][reason] = (
+                    diagnostics['merge_rejection_reasons'].get(reason, 0) + 1)
             diagnostics['rejected_merges'] += 1
         if not merged:
             break

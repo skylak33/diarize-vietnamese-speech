@@ -35,13 +35,27 @@ def test_runner_outputs_and_oracle_count(tmp_path, monkeypatch):
     diagnostics=list(csv.DictReader((out/'config_001'/'diagnostics.csv').open()))
     required={'recording_id','model_checkpoint','n_clusters_before_postmerge',
               'n_clusters_after_postmerge','n_speakers_after_postprocess','DER',
-              'SpeakerError','merge_attempts','accepted_merges','rejected_merges'}
+              'SpeakerError','merge_attempts','accepted_merges','rejected_merges',
+              'merge_candidates','merge_rejection_reasons'}
     assert required <= diagnostics[0].keys()
     summary=rows[0]
     assert summary['OverclusteringRate']==summary['UnderclusteringRate']=='0.0'
     assert summary['AveragePredictedSpeakers']==summary['AverageReferenceSpeakers']=='1.0'
     assert float(summary['ElapsedSeconds']) >= 0 and float(summary['PeakPythonMemoryMB']) >= 0
     assert (out/'experiment_manifest.json').is_file()
+    summary=json.loads((out/'config_001'/'centroid_merge_summary.json').read_text())
+    assert summary['merge_attempts']==0 and summary['best_similarity']['count']==0
+
+
+def test_centroid_summary_includes_all_targets_and_reasons():
+    rows=[dict(merge_attempts=1,accepted_merges=0,rejected_merges=1,
+               merge_candidates=[dict(best_similarity=.7,target_similarities=[
+                   {'similarity':.7},{'similarity':.65}])],
+               merge_rejection_reasons={'below_similarity_threshold':1})]
+    summary=runner.centroid_merge_summary(rows)
+    assert summary['best_similarity']['mean']==.7
+    assert summary['all_target_similarities']['count']==2
+    assert summary['rejection_reasons']=={'below_similarity_threshold':1}
 
 
 def test_plot_outputs(tmp_path,monkeypatch):

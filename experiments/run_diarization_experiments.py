@@ -2,6 +2,7 @@
 import argparse
 import csv
 import json
+import statistics
 import sys
 import time
 import tracemalloc
@@ -71,16 +72,44 @@ def diagnostic_row(file_id, model, config, trace, metric):
         accepted_merges=trace.get('accepted_merges', 0),
         rejected_merges=trace.get('rejected_merges', 0),
         merge_similarity_scores=trace.get('merge_similarity_scores', []),
+        merge_candidates=trace.get('merge_candidates', []),
+        merge_rejection_reasons=trace.get('merge_rejection_reasons', {}),
+    )
+
+
+def centroid_merge_summary(rows):
+    def summary(values):
+        values = [value for value in values if value is not None]
+        return (dict(count=len(values), minimum=min(values), maximum=max(values),
+                     mean=statistics.fmean(values), median=statistics.median(values))
+                if values else dict(count=0, minimum=None, maximum=None, mean=None, median=None))
+
+    candidates = [candidate for row in rows for candidate in row['merge_candidates']]
+    target_scores = [target['similarity'] for candidate in candidates
+                     for target in candidate['target_similarities']]
+    reasons = {}
+    for row in rows:
+        for reason, count in row['merge_rejection_reasons'].items():
+            reasons[reason] = reasons.get(reason, 0) + count
+    return dict(
+        merge_attempts=sum(row['merge_attempts'] for row in rows),
+        accepted_merges=sum(row['accepted_merges'] for row in rows),
+        rejected_merges=sum(row['rejected_merges'] for row in rows),
+        rejection_reasons=reasons,
+        best_similarity=summary([candidate.get('best_similarity') for candidate in candidates]),
+        all_target_similarities=summary(target_scores),
     )
 
 
 def save_diagnostics(rows, folder):
     (folder / 'diagnostics.json').write_text(json.dumps(rows, indent=2), encoding='utf-8')
+    (folder / 'centroid_merge_summary.json').write_text(
+        json.dumps(centroid_merge_summary(rows), indent=2), encoding='utf-8')
     with (folder / 'diagnostics.csv').open('w', newline='', encoding='utf-8') as handle:
         writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
         writer.writeheader()
         for row in rows:
-            writer.writerow({key: json.dumps(value) if isinstance(value, list) else value
+            writer.writerow({key: json.dumps(value) if isinstance(value, (list, dict)) else value
                              for key, value in row.items()})
 
 
@@ -171,7 +200,8 @@ def main():
                         n_clusters_before_postmerge=0, n_clusters_after_postmerge=0,
                         n_speakers_after_postprocess=0, cluster_sizes_before_postmerge=[],
                         cluster_sizes_after_postmerge=[], merge_attempts=0, accepted_merges=0,
-                        rejected_merges=0, merge_similarity_scores=[])
+                        rejected_merges=0, merge_similarity_scores=[], merge_candidates=[],
+                        merge_rejection_reasons={})
                 else:
                     traces[file_id] = {}
                     diarize(str(audio), args.model, n_speakers=n, method=config['method'],
