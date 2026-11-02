@@ -16,6 +16,15 @@ def _assert_pure(labels, n_speakers, samples=20):
         assert len(set(labels[index * samples:(index + 1) * samples])) == 1
 
 
+def _short_embeddings(n_samples):
+    rng = np.random.default_rng(100 + n_samples)
+    split = n_samples // 2
+    return np.vstack([
+        rng.normal([1., 0., 0.], 0.01, (split, 3)),
+        rng.normal([0., 1., 0.], 0.01, (n_samples - split, 3)),
+    ])
+
+
 @pytest.mark.parametrize('n_speakers', [1, 2, 3])
 def test_nme_sc_estimates_well_separated_speakers(n_speakers):
     labels = cluster_embeddings(_embeddings(n_speakers), method='nme_sc',
@@ -28,6 +37,58 @@ def test_nme_sc_handles_short_and_degenerate_inputs():
     assert len(set(cluster_embeddings(np.array([[1., 0.], [0., 1.]]), method='nme_sc'))) == 2
     assert cluster_embeddings(np.ones((8, 3)), method='nme_sc').tolist() == [0] * 8
     assert cluster.cluster_nme_sc(np.eye(4), n_speakers=4).tolist() == [0, 1, 2, 3]
+
+
+@pytest.mark.parametrize('n_samples', range(2, 8))
+def test_nme_sc_short_two_speaker_recordings(n_samples):
+    labels = cluster_embeddings(_short_embeddings(n_samples), method='nme_sc',
+                                max_speakers=3, seed=7)
+
+    split = n_samples // 2
+    assert len(set(labels[:split])) == len(set(labels[split:])) == 1
+    assert labels[0] != labels[split]
+
+
+def test_nme_sc_eight_embeddings_do_not_spend_p_on_self():
+    labels = cluster_embeddings(_short_embeddings(8), method='nme_sc',
+                                max_speakers=3, seed=7)
+
+    _assert_pure(labels, 2, samples=4)
+
+
+@pytest.mark.parametrize('n_samples', range(1, 9))
+def test_nme_sc_handles_one_speaker_from_one_to_eight_embeddings(n_samples):
+    rng = np.random.default_rng(n_samples)
+    embeddings = rng.normal([1., 0., 0.], 0.001, (n_samples, 3))
+
+    labels = cluster_embeddings(embeddings, method='nme_sc', max_speakers=3, seed=7)
+
+    assert len(set(labels)) == 1
+
+
+def test_nme_sc_handles_three_speakers_in_short_recording():
+    embeddings = np.array([
+        [1., 0., 0.], [0.999, 0.001, 0.],
+        [0., 1., 0.], [0.001, 0.999, 0.],
+        [0., 0., 1.], [0., 0.001, 0.999],
+    ])
+
+    labels = cluster_embeddings(embeddings, method='nme_sc', n_speakers=3, seed=7)
+
+    _assert_pure(labels, 3, samples=2)
+
+
+def test_nme_sc_nearly_identical_embeddings_remain_one_speaker():
+    embeddings = np.array([
+        [1., 0., 0.],
+        [1., 1e-6, 0.],
+        [1., 0., 1e-6],
+        [1., -1e-6, 0.],
+    ])
+
+    labels = cluster_embeddings(embeddings, method='nme_sc', seed=7)
+
+    assert len(set(labels)) == 1
 
 
 def test_nme_sc_known_count_and_determinism():
@@ -83,7 +144,7 @@ def test_nme_sc_known_count_falls_back_when_target_gap_is_zero(monkeypatch):
         'eigh',
         lambda matrix: (np.zeros(len(matrix)), np.eye(len(matrix))),
     )
-    expected = np.array([0, 0, 1, 1])
+    expected = np.array([0, 0, 0, 0, 1, 1, 1, 1])
     calls = []
 
     def fake_ahc(embeddings, n_speakers=None, threshold=0.7):
@@ -92,7 +153,7 @@ def test_nme_sc_known_count_falls_back_when_target_gap_is_zero(monkeypatch):
 
     monkeypatch.setattr(cluster, 'cluster_ahc', fake_ahc)
 
-    labels = cluster.cluster_nme_sc(np.eye(4), n_speakers=2, max_speakers=1)
+    labels = cluster.cluster_nme_sc(np.eye(8), n_speakers=2, max_speakers=1)
 
     assert calls == [2]
     assert np.array_equal(labels, expected)

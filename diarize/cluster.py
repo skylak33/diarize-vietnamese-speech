@@ -194,11 +194,13 @@ def cluster_nme_sc(
     n_samples = len(embeddings)
     if n_speakers == n_samples:
         return numpy.arange(n_samples)
-    if n_samples < 4:
-        # The paper searches p in [1, floor(N/4)], which is empty for N < 4.
+    if n_samples < 8:
+        # NME cannot auto-tune while floor(N/4) offers fewer than two p values.
         return cluster_ahc(embeddings, n_speakers=n_speakers, threshold=0.65)
 
     affinity = embeddings @ embeddings.T
+    # Self-loops cancel in D - A and must not consume an informative neighbor.
+    numpy.fill_diagonal(affinity, -numpy.inf)
     max_neighbors = max(1, n_samples // 4)
     max_clusters = min(max_speakers, n_samples - 1)
     gap_limit = (max_clusters if n_speakers is None
