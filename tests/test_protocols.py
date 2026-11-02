@@ -60,6 +60,14 @@ def test_controlled_ablation():
     assert {0.65, 0.70, 0.75, 0.80} <= set(thresholds)
 
 
+def test_window_ablation_uses_requested_pairs():
+    args=Namespace(method='ahc',threshold=.65,vad_threshold=.5,window_sec=1.5,
+                   step_sec=None,speaker_mode='automatic',experiment='window')
+    configs=configurations(args)
+    assert [(c['window_sec'],c['step_sec']) for c in configs] == [
+        (1.5,.75),(2.,1.),(3.,1.5)]
+
+
 def test_training_log(tmp_path):
     p=tmp_path/'score.txt'
     p.write_text('1 epoch, LR 0.001, LOSS 2.5, ACC 30.00%\n2 epoch, LR 9.7e-4, LOSS 2.0, ACC 40.00%\n')

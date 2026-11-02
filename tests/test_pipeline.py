@@ -44,6 +44,17 @@ def test_bad_window():
         extract_embeddings_for_segments(None,np.zeros(16000),[(0,1)],step_sec=0)
 
 
+def test_windowing_keeps_final_coverage_and_short_region_policy(monkeypatch):
+    monkeypatch.setattr('diarize.pipeline.extract_embedding',
+                        lambda encoder, audio, start, end: np.array([start, end]))
+    audio=np.zeros(4*16000)
+    segments,embeddings=extract_embeddings_for_segments(None,audio,[(0,4)],window_sec=3,step_sec=1.5)
+    assert segments == [(0.,3.),(1.,4.)]
+    assert embeddings.shape == (2,2)
+    short,short_embeddings=extract_embeddings_for_segments(None,audio,[(0,.49)],min_segment_sec=.5)
+    assert short == [] and len(short_embeddings) == 0
+
+
 def test_postprocessing_rejects_misaligned_inputs():
     with pytest.raises(ValueError,match='equal length'):
         merge_short_segments([(0,1)],np.array([]))

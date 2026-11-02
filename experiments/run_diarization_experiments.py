@@ -18,7 +18,7 @@ def configurations(args):
         'clustering': ('method', ['ahc', 'spectral']),
         'ahc_threshold': ('ahc_threshold', [0.65,0.70,0.75,0.80]),
         'vad_threshold': ('vad_threshold', [0.3,0.4,0.5,0.6,0.7]),
-        'window': ('window_sec', [1.,1.5,2.]),
+        'window': ('window_sec', [1.5,2.0,3.0]),
         'speaker_count': ('speaker_mode', ['known','automatic']),
         'centroid_merge': ('centroid_similarity_threshold', [None,0.75,0.80,0.85]),
     }
