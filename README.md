@@ -13,7 +13,8 @@ AHC/spectral clustering → RTTM. Архитектура ECAPA-TDNN сохран
 - `eval/`: verification EER/minDCF, адаптеры данных, diarization DER.
 - `experiments/`: ablations, сравнение checkpoints, графики обучения.
 - `utils/`: metrics, audio decoding, model/device loading, seeds, provenance.
-- `configs/`: YAML-рецепты параметров; автоматически не загружаются, используется CLI.
+- `configs/`: проверяемые YAML-конфигурации с приоритетом CLI → YAML → defaults.
+- `docs/DIARIZATION.md`: overclustering, режимы inference и воспроизводимые ablations.
 - `tests/`: CPU unit tests на синтетических данных без скачивания датасетов.
 
 ## Установка
@@ -177,6 +178,10 @@ python diarize/pipeline.py audio.wav --model exps/exp1/model/model_0034.model \
 
 python diarize/pipeline.py audio.wav --model exps/exp1/model/model_0034.model \
   --method spectral --n_speakers 2 --output results/audio.rttm
+
+python diarize/pipeline.py audio.wav --model exps/exp1/model/model_0034.model \
+  --config configs/diarization_default.yaml --centroid_merge \
+  --centroid_similarity_threshold 0.80 --output results/audio.rttm
 ```
 
 Старые позиционные аргументы и defaults window=1.5, step=0.75 сохранены.
@@ -276,10 +281,12 @@ python experiments/run_diarization_experiments.py \
 
 Выбор `--experiment`:
 
-- `clustering`: AHC/spectral.
-- `ahc_threshold`: 0.45, 0.50, 0.55, 0.60, 0.65, 0.70, 0.75; AHC automatic count.
+- `clustering`: AHC/spectral/NME-SC.
+- `ahc_threshold`: 0.65, 0.70, 0.75, 0.80; AHC automatic count.
+- `centroid_merge`: AHC only и post-merge с cosine similarity 0.75, 0.80, 0.85.
 - `vad_threshold`: 0.3, 0.4, 0.5, 0.6, 0.7.
-- `window`: 1.0, 1.5, 2.0 s.
+- `vad_silence`: 100, 200, 300 ms.
+- `window`: 1.5/0.75, 2.0/1.0, 3.0/1.5 s (window/step).
 - `speaker_count`: known/automatic.
 - `all`: объединение этих **однофакторных** серий с удалением дубликатов, не декартово произведение.
 
@@ -291,12 +298,19 @@ Baseline выбирается через `--method`, `--threshold`, `--vad_thres
 с seed, версиями, git revision и SHA256 модели/audio/reference.
 
 Общий CSV содержит:
-`method,ahc_threshold,vad_threshold,window_sec,step_sec,speaker_mode,DER,Miss,FalseAlarm,SpeakerError,SpeakerCountAccuracy,SpeakerCountMAE,config_id`.
+`method,ahc_threshold,vad_threshold,vad_min_silence_ms,window_sec,step_sec,`
+`speaker_mode,centroid_merge,DER,Miss,FalseAlarm,SpeakerError,`
+`SpeakerCountAccuracy,SpeakerCountMAE,OverclusteringRate,UnderclusteringRate,`
+`AveragePredictedSpeakers,AverageReferenceSpeakers,ElapsedSeconds,`
+`PeakPythonMemoryMB,config_id`.
 Per-file CSV/JSON: `N_ref,N_pred,abs_error,exact_match` плюс DER/components.
 Accuracy — доля точных совпадений (0–1), MAE — средняя абсолютная ошибка числа speakers.
 `N_pred` измеряется по окончательному RTTM; smoothing может уменьшить число меток даже
 при заданном числе кластеров. Если known count больше числа embeddings, запуск выдаёт
 явную ошибку: такая запись не пропускается и count не подменяется.
+
+Полное описание различий AHC distance и centroid cosine similarity, YAML precedence,
+диагностик и команд ViYT-Diar находится в [`docs/DIARIZATION.md`](docs/DIARIZATION.md).
 
 ### Plots
 
