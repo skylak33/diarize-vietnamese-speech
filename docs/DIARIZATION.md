@@ -108,6 +108,7 @@ python -m experiments.run_diarization_experiments \
 Supported series:
 
 - `ahc_threshold`: distances 0.65, 0.70, 0.75, 0.80;
+- `ahc_stability`: development-only distances 0.70, 0.72, 0.74, 0.75, 0.77;
 - `centroid_merge`: AHC-only plus similarity 0.75, 0.80, 0.85;
 - `window`: window/step 1.5/0.75, 2.0/1.0, 3.0/1.5 seconds;
 - `vad_silence`: 100, 200, 300 ms;
@@ -130,6 +131,12 @@ configuration, embedding-window count, cluster counts and sizes before/after
 post-merge, final RTTM speaker count, singleton/small-cluster counts, reference
 and predicted counts, DER components, and centroid merge attempts/scores.
 Reference-dependent fields are null when references are unavailable.
+Compatible configurations reuse an in-memory embedding cache and report cache
+hits. VAD or window changes always use a different cache entry.
+
+See [`DIARIZATION_ERROR_ANALYSIS.md`](DIARIZATION_ERROR_ANALYSIS.md) for the
+reference-coverage audit, SpeakerError count split, centroid rejection evidence,
+and the development-only AHC stability workflow.
 
 ## ViYT-Diar exploratory measurements
 
