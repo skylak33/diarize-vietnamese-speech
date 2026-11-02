@@ -137,6 +137,7 @@ def main():
     parser.add_argument('--max_small_cluster_size', type=int, default=4)
     parser.add_argument('--collar', type=float, default=0.25)
     parser.add_argument('--skip_overlap', action='store_true')
+    parser.add_argument('--uem_dir', help='Optional directory of official UEM files')
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--device', choices=['auto','cpu','cuda'], default='auto')
     parser.add_argument('--dry_run', action='store_true', help='Print configurations without loading audio/model')
@@ -153,9 +154,10 @@ def main():
     from utils.model import load_model
     from utils.seed import set_seed
     from utils.provenance import sha256, environment
-    from eval.der import load_rttm, parse_rttm, speaker_count, evaluate_annotations, save_results
+    from eval.der import load_rttm, load_uem, parse_rttm, speaker_count, evaluate_annotations, save_results
     import soundfile as sf
     refs = load_rttm(args.ref_rttm_dir)
+    uem_data = load_uem(args.uem_dir) if args.uem_dir else None
     audios = {}
     for path in sorted(Path(args.audio_dir).rglob('*')):
         if path.suffix.lower() not in {'.wav','.flac','.ogg'}:
@@ -165,14 +167,20 @@ def main():
         audios[path.stem] = path
     if refs.keys() != audios.keys():
         raise ValueError(f'Audio/reference IDs differ; missing audio={refs.keys()-audios.keys()}, missing reference={audios.keys()-refs.keys()}')
+    if uem_data is not None and uem_data.keys() != refs.keys():
+        raise ValueError(f'UEM/reference IDs differ; missing UEM={refs.keys()-uem_data.keys()}, extra UEM={uem_data.keys()-refs.keys()}')
     out = Path(args.output_dir)
     out.mkdir(parents=True, exist_ok=True)
     if (out / 'experiment_manifest.json').exists():
         raise FileExistsError('Output already contains an experiment; choose a new --output_dir')
+    uem_files = sorted(Path(args.uem_dir).rglob('*.uem')) if args.uem_dir else []
     metadata = dict(arguments=vars(args), configurations=configs, environment=environment(),
                     model_sha256=sha256(args.model),
                     audio_sha256={k:sha256(v) for k,v in audios.items()},
-                    reference_sha256={str(p):sha256(p) for p in sorted(Path(args.ref_rttm_dir).rglob('*.rttm'))})
+                    reference_sha256={str(p):sha256(p) for p in sorted(Path(args.ref_rttm_dir).rglob('*.rttm'))},
+                    evaluation=dict(mode='external_uem' if uem_data is not None else 'full_audio',
+                                    collar=args.collar, skip_overlap=args.skip_overlap,
+                                    uem_sha256={str(p):sha256(p) for p in uem_files}))
     (out / 'experiment_manifest.json').write_text(json.dumps(metadata, indent=2), encoding='utf-8')
     durations = {key:sf.info(path).duration for key,path in audios.items()}
     set_seed(args.seed)
@@ -222,7 +230,8 @@ def main():
                             vad_min_silence_ms=config['vad_min_silence_ms'],
                             embedding_cache=embedding_cache)
                 hypotheses[file_id] = parse_rttm(str(rttm)).get(file_id, [])
-            result = evaluate_annotations(refs, hypotheses, args.collar, args.skip_overlap, durations)
+            result = evaluate_annotations(refs, hypotheses, args.collar, args.skip_overlap,
+                                          durations, uem_data)
             save_results(result, folder / 'der.json', folder / 'per_file.csv')
             save_diagnostics([diagnostic_row(file_id, args.model, config, traces[file_id], result[file_id])
                               for file_id in sorted(audios)], folder)
