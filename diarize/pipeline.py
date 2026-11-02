@@ -18,7 +18,8 @@ from models.ecapa_tdnn import ECAPA_TDNN
 from utils.model import load_model
 from utils.seed import set_seed
 from diarize.vad import load_audio, get_speech_segments
-from diarize.cluster import cluster_embeddings, merge_short_segments, smooth_labels
+from diarize.cluster import (cluster_embeddings, merge_short_segments,
+                             merge_similar_clusters, smooth_labels)
 
 SAMPLE_RATE = 16000
 
@@ -137,6 +138,10 @@ def diarize(
     encoder=None,
     min_segment_sec: float = 0.5,
     diagnostics: dict | None = None,
+    centroid_merge: bool = False,
+    centroid_similarity_threshold: float = 0.80,
+    max_small_cluster_size: int = 4,
+    centroid_similarity_margin: float = 0.05,
 ) -> str:
     set_seed(seed)
     if diagnostics is not None:
@@ -147,7 +152,9 @@ def diarize(
                            cluster_sizes_before_postmerge=[],
                            cluster_sizes_after_postmerge=[], merge_attempts=0,
                            accepted_merges=0, rejected_merges=0,
-                           merge_similarity_scores=[])
+                           merge_similarity_scores=[],
+                           centroid_merge_requested=centroid_merge,
+                           centroid_merge_skipped_known_count=False)
     if not 0 < step_sec <= window_sec or not 0 <= vad_threshold <= 1:
         raise ValueError("Require 0 < step_sec <= window_sec and 0 <= vad_threshold <= 1")
     if output_rttm:
@@ -199,6 +206,18 @@ def diarize(
                            cluster_sizes_before_postmerge=sizes,
                            cluster_sizes_after_postmerge=sizes)
 
+    if centroid_merge and n_speakers is None:
+        labels, merge_diagnostics = merge_similar_clusters(
+            embeddings, labels, centroid_similarity_threshold, max_small_cluster_size,
+            centroid_similarity_margin, return_diagnostics=True)
+        if diagnostics is not None:
+            sizes_after = numpy.unique(labels, return_counts=True)[1].tolist()
+            diagnostics.update(merge_diagnostics,
+                               n_clusters_after_postmerge=len(set(labels)),
+                               cluster_sizes_after_postmerge=sizes_after)
+    elif centroid_merge and diagnostics is not None:
+        diagnostics['centroid_merge_skipped_known_count'] = True
+
     print(f"\n[diarize] === Шаг 5: Постобработка ===")
     labels = smooth_labels(sub_segs, labels, window=3)
     sub_segs = partition_overlapping_windows(sub_segs)
@@ -234,6 +253,9 @@ if __name__ == "__main__":
     parser.add_argument("--device", choices=["auto", "cuda", "cpu"], default="auto")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--max_speakers", type=int, default=10)
+    parser.add_argument("--centroid_merge", action="store_true")
+    parser.add_argument("--centroid_similarity_threshold", type=float, default=0.80)
+    parser.add_argument("--max_small_cluster_size", type=int, default=4)
     args = parser.parse_args()
 
     rttm = diarize(
@@ -246,6 +268,9 @@ if __name__ == "__main__":
         output_rttm=args.output,
         window_sec=args.window_sec, step_sec=args.step_sec,
         device=args.device, seed=args.seed, max_speakers=args.max_speakers,
+        centroid_merge=args.centroid_merge,
+        centroid_similarity_threshold=args.centroid_similarity_threshold,
+        max_small_cluster_size=args.max_small_cluster_size,
     )
     print("\n=== RTTM ===")
     print(rttm)

@@ -11,6 +11,84 @@ from sklearn.cluster import AgglomerativeClustering, SpectralClustering
 from sklearn.preprocessing import normalize
 from sklearn.metrics import silhouette_score
 
+
+def _canonical_labels(labels: numpy.ndarray) -> numpy.ndarray:
+    mapping = {}
+    return numpy.array([mapping.setdefault(label.item() if hasattr(label, "item") else label,
+                                            len(mapping)) for label in labels], dtype=int)
+
+
+def merge_similar_clusters(
+    embeddings: numpy.ndarray,
+    labels: numpy.ndarray,
+    similarity_threshold: float = 0.80,
+    max_small_cluster_size: int = 4,
+    min_similarity_margin: float = 0.05,
+    return_diagnostics: bool = False,
+):
+    """Merge a small cluster into a clearly similar, strictly larger cluster."""
+    embeddings = numpy.asarray(embeddings)
+    labels = numpy.asarray(labels)
+    diagnostics = dict(merge_attempts=0, accepted_merges=0, rejected_merges=0,
+                       merge_similarity_scores=[])
+    if not -1 <= similarity_threshold <= 1:
+        raise ValueError("similarity_threshold must be between -1 and 1")
+    if max_small_cluster_size < 1:
+        raise ValueError("max_small_cluster_size must be positive")
+    if not 0 <= min_similarity_margin <= 2:
+        raise ValueError("min_similarity_margin must be between 0 and 2")
+    if len(embeddings) != len(labels):
+        raise ValueError("embeddings and labels must have equal length")
+    if len(embeddings) == 0:
+        result = numpy.array([], dtype=int)
+        return (result, diagnostics) if return_diagnostics else result
+    if embeddings.ndim != 2 or labels.ndim != 1:
+        raise ValueError("embeddings must be 2-D and labels must be 1-D")
+    if (not numpy.isfinite(embeddings).all()
+            or (numpy.linalg.norm(embeddings, axis=1) == 0).any()):
+        raise ValueError("Embeddings must be finite nonzero vectors")
+
+    result = _canonical_labels(labels)
+    while True:
+        unique, counts = numpy.unique(result, return_counts=True)
+        if len(unique) < 2:
+            break
+        sizes = dict(zip(unique.tolist(), counts.tolist()))
+        merged = False
+        for fragment in sorted(unique, key=lambda label: (sizes[label], label)):
+            if sizes[fragment] > max_small_cluster_size:
+                continue
+            targets = [label for label in unique if sizes[label] > sizes[fragment]]
+            if not targets:
+                continue
+            fragment_centroid = embeddings[result == fragment].mean(axis=0)
+            target_centroids = numpy.vstack([embeddings[result == label].mean(axis=0)
+                                             for label in targets])
+            fragment_norm = numpy.linalg.norm(fragment_centroid)
+            target_norms = numpy.linalg.norm(target_centroids, axis=1)
+            diagnostics['merge_attempts'] += 1
+            if fragment_norm == 0 or (target_norms == 0).any():
+                diagnostics['merge_similarity_scores'].append(None)
+                diagnostics['rejected_merges'] += 1
+                continue
+            similarities = target_centroids @ fragment_centroid / (target_norms * fragment_norm)
+            order = numpy.argsort(-similarities, kind='stable')
+            best_index = int(order[0])
+            best = float(similarities[best_index])
+            second = float(similarities[order[1]]) if len(order) > 1 else -1.0
+            diagnostics['merge_similarity_scores'].append(best)
+            if best >= similarity_threshold and best - second >= min_similarity_margin:
+                result[result == fragment] = targets[best_index]
+                result = _canonical_labels(result)
+                diagnostics['accepted_merges'] += 1
+                merged = True
+                break
+            diagnostics['rejected_merges'] += 1
+        if not merged:
+            break
+
+    return (result, diagnostics) if return_diagnostics else result
+
 def cluster_ahc(
     embeddings: numpy.ndarray,
     n_speakers: int   = None,

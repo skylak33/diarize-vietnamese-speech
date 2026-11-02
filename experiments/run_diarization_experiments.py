@@ -10,13 +10,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 def configurations(args):
     base = dict(method=args.method, ahc_threshold=args.threshold,
                 vad_threshold=args.vad_threshold, window_sec=args.window_sec,
-                step_sec=args.step_sec or args.window_sec / 2, speaker_mode=args.speaker_mode)
+                step_sec=args.step_sec or args.window_sec / 2, speaker_mode=args.speaker_mode,
+                centroid_merge=getattr(args, 'centroid_merge', False),
+                centroid_similarity_threshold=getattr(args, 'centroid_similarity_threshold', 0.80),
+                max_small_cluster_size=getattr(args, 'max_small_cluster_size', 4))
     variations = {
         'clustering': ('method', ['ahc', 'spectral']),
         'ahc_threshold': ('ahc_threshold', [0.65,0.70,0.75,0.80]),
         'vad_threshold': ('vad_threshold', [0.3,0.4,0.5,0.6,0.7]),
         'window': ('window_sec', [1.,1.5,2.]),
         'speaker_count': ('speaker_mode', ['known','automatic']),
+        'centroid_merge': ('centroid_similarity_threshold', [None,0.75,0.80,0.85]),
     }
     selected = variations if args.experiment == 'all' else [args.experiment]
     configs = []
@@ -26,6 +30,10 @@ def configurations(args):
             config = {**base, key:value}
             if experiment == 'ahc_threshold':
                 config.update(method='ahc', speaker_mode='automatic')
+            if experiment == 'centroid_merge':
+                config.update(method='ahc', speaker_mode='automatic', centroid_merge=value is not None)
+                if value is None:
+                    config['centroid_similarity_threshold'] = base['centroid_similarity_threshold']
             if key == 'window_sec' and args.step_sec is None:
                 config['step_sec'] = value / 2
             if not 0 < config['step_sec'] <= config['window_sec']:
@@ -77,7 +85,7 @@ def main():
     for key in ('audio_dir','ref_rttm_dir','output_dir'):
         parser.add_argument('--'+key, required=True)
     parser.add_argument('--model', default='exps/exp1/model/model_0034.model')
-    parser.add_argument('--experiment', choices=['clustering','ahc_threshold','vad_threshold','window','speaker_count','all'], default='clustering')
+    parser.add_argument('--experiment', choices=['clustering','ahc_threshold','vad_threshold','window','speaker_count','centroid_merge','all'], default='clustering')
     parser.add_argument('--method', choices=['ahc','spectral'], default='ahc')
     parser.add_argument('--threshold', type=float, default=0.65)
     parser.add_argument('--vad_threshold', type=float, default=0.5)
@@ -85,6 +93,9 @@ def main():
     parser.add_argument('--step_sec', type=float)
     parser.add_argument('--speaker_mode', choices=['known','automatic'], default='automatic')
     parser.add_argument('--max_speakers', type=int, default=10)
+    parser.add_argument('--centroid_merge', action='store_true')
+    parser.add_argument('--centroid_similarity_threshold', type=float, default=0.80)
+    parser.add_argument('--max_small_cluster_size', type=int, default=4)
     parser.add_argument('--collar', type=float, default=0.25)
     parser.add_argument('--skip_overlap', action='store_true')
     parser.add_argument('--seed', type=int, default=42)
@@ -128,6 +139,7 @@ def main():
     set_seed(args.seed)
     encoder = load_model(args.model, args.device)
     fields = ['method','ahc_threshold','vad_threshold','window_sec','step_sec','speaker_mode',
+              'centroid_merge','centroid_similarity_threshold','max_small_cluster_size',
               'DER','Miss','FalseAlarm','SpeakerError','SpeakerCountAccuracy','SpeakerCountMAE',
               'OverclusteringRate','UnderclusteringRate','AveragePredictedSpeakers',
               'AverageReferenceSpeakers','config_id']
@@ -160,7 +172,9 @@ def main():
                             window_sec=config['window_sec'], step_sec=config['step_sec'],
                             output_rttm=str(rttm), seed=args.seed, device=args.device,
                             max_speakers=args.max_speakers, encoder=encoder,
-                            diagnostics=traces[file_id])
+                            diagnostics=traces[file_id], centroid_merge=config['centroid_merge'],
+                            centroid_similarity_threshold=config['centroid_similarity_threshold'],
+                            max_small_cluster_size=config['max_small_cluster_size'])
                 hypotheses[file_id] = parse_rttm(str(rttm)).get(file_id, [])
             result = evaluate_annotations(refs, hypotheses, args.collar, args.skip_overlap, durations)
             save_results(result, folder / 'der.json', folder / 'per_file.csv')
