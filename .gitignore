@@ -1,6 +1,7 @@
 НИР.pdf
 
 .venv/
+results/
 __pycache__/
 *.py[cod]
 .pytest_cache/
