@@ -142,6 +142,7 @@ def diarize(
     centroid_similarity_threshold: float = 0.80,
     max_small_cluster_size: int = 4,
     centroid_similarity_margin: float = 0.05,
+    vad_min_silence_ms: int = 100,
 ) -> str:
     set_seed(seed)
     if diagnostics is not None:
@@ -157,6 +158,8 @@ def diarize(
                            centroid_merge_skipped_known_count=False)
     if not 0 < step_sec <= window_sec or not 0 <= vad_threshold <= 1:
         raise ValueError("Require 0 < step_sec <= window_sec and 0 <= vad_threshold <= 1")
+    if not isinstance(vad_min_silence_ms, int) or vad_min_silence_ms <= 0:
+        raise ValueError("vad_min_silence_ms must be a positive integer")
     if output_rttm:
         Path(output_rttm).parent.mkdir(parents=True, exist_ok=True)
         Path(output_rttm).write_text("", encoding="utf-8")
@@ -168,7 +171,9 @@ def diarize(
     print(f"[diarize] Файл: {audio_path}, длительность: {duration:.1f} сек")
 
     print(f"\n[diarize] === Шаг 2: VAD ===")
-    speech_segments = get_speech_segments(audio_path, threshold=vad_threshold, return_seconds=True)
+    speech_segments = get_speech_segments(audio_path, threshold=vad_threshold,
+                                          min_silence_ms=vad_min_silence_ms,
+                                          return_seconds=True)
     speech_total = sum(e - s for s, e in speech_segments)
     print(f"[diarize] Речевых сегментов: {len(speech_segments)}, "
           f"суммарно: {speech_total:.1f} сек ({100*speech_total/duration:.0f}%)")
@@ -247,6 +252,7 @@ if __name__ == "__main__":
                         choices=["ahc", "spectral"])
     parser.add_argument("--threshold",       type=float, default=0.65)
     parser.add_argument("--vad_threshold",   type=float, default=0.5)
+    parser.add_argument("--vad_min_silence_ms", type=int, default=100)
     parser.add_argument("--output",          type=str, default=None)
     parser.add_argument("--window_sec", type=float, default=1.5)
     parser.add_argument("--step_sec", type=float, default=0.75)
@@ -265,6 +271,7 @@ if __name__ == "__main__":
         method=args.method,
         threshold=args.threshold,
         vad_threshold=args.vad_threshold,
+        vad_min_silence_ms=args.vad_min_silence_ms,
         output_rttm=args.output,
         window_sec=args.window_sec, step_sec=args.step_sec,
         device=args.device, seed=args.seed, max_speakers=args.max_speakers,

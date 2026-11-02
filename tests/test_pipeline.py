@@ -3,8 +3,10 @@ import numpy as np
 import pytest
 import torch
 from utils.seed import set_seed
+from diarize import pipeline
 from diarize.cluster import cluster_embeddings, merge_short_segments, smooth_labels
 from diarize.pipeline import merge_consecutive_segments, partition_overlapping_windows, extract_embeddings_for_segments
+from diarize.vad import get_speech_segments
 
 
 def test_seed_reproducibility():
@@ -62,3 +64,18 @@ def test_postprocessing_rejects_misaligned_inputs():
         smooth_labels([(0,1)],np.array([]))
     with pytest.raises(ValueError,match='positive odd'):
         smooth_labels([],np.array([]),window=2)
+
+
+def test_vad_min_silence_propagation_and_validation(monkeypatch):
+    monkeypatch.setattr(pipeline,'load_audio',lambda _: (np.zeros(16000),16000))
+    received={}
+    def fake_vad(*args,**kwargs):
+        received.update(kwargs)
+        return []
+    monkeypatch.setattr(pipeline,'get_speech_segments',fake_vad)
+    assert pipeline.diarize('sample.wav','unused',encoder=object(),vad_min_silence_ms=200) == ''
+    assert received['min_silence_ms'] == 200
+    with pytest.raises(ValueError,match='positive integer'):
+        pipeline.diarize('sample.wav','unused',encoder=object(),vad_min_silence_ms=0)
+    with pytest.raises(ValueError,match='VAD durations'):
+        get_speech_segments('unused',min_silence_ms=0)

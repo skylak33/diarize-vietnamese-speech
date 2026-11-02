@@ -68,6 +68,14 @@ def test_window_ablation_uses_requested_pairs():
         (1.5,.75),(2.,1.),(3.,1.5)]
 
 
+def test_vad_silence_ablation_is_independent():
+    args=Namespace(method='ahc',threshold=.65,vad_threshold=.5,vad_min_silence_ms=100,
+                   window_sec=1.5,step_sec=None,speaker_mode='automatic',experiment='vad_silence')
+    configs=configurations(args)
+    assert [c['vad_min_silence_ms'] for c in configs] == [100,200,300]
+    assert {(c['window_sec'],c['step_sec'],c['vad_threshold']) for c in configs} == {(1.5,.75,.5)}
+
+
 def test_training_log(tmp_path):
     p=tmp_path/'score.txt'
     p.write_text('1 epoch, LR 0.001, LOSS 2.5, ACC 30.00%\n2 epoch, LR 9.7e-4, LOSS 2.0, ACC 40.00%\n')

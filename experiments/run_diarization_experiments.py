@@ -13,11 +13,13 @@ def configurations(args):
                 step_sec=args.step_sec or args.window_sec / 2, speaker_mode=args.speaker_mode,
                 centroid_merge=getattr(args, 'centroid_merge', False),
                 centroid_similarity_threshold=getattr(args, 'centroid_similarity_threshold', 0.80),
-                max_small_cluster_size=getattr(args, 'max_small_cluster_size', 4))
+                max_small_cluster_size=getattr(args, 'max_small_cluster_size', 4),
+                vad_min_silence_ms=getattr(args, 'vad_min_silence_ms', 100))
     variations = {
         'clustering': ('method', ['ahc', 'spectral']),
         'ahc_threshold': ('ahc_threshold', [0.65,0.70,0.75,0.80]),
         'vad_threshold': ('vad_threshold', [0.3,0.4,0.5,0.6,0.7]),
+        'vad_silence': ('vad_min_silence_ms', [100,200,300]),
         'window': ('window_sec', [1.5,2.0,3.0]),
         'speaker_count': ('speaker_mode', ['known','automatic']),
         'centroid_merge': ('centroid_similarity_threshold', [None,0.75,0.80,0.85]),
@@ -85,10 +87,11 @@ def main():
     for key in ('audio_dir','ref_rttm_dir','output_dir'):
         parser.add_argument('--'+key, required=True)
     parser.add_argument('--model', default='exps/exp1/model/model_0034.model')
-    parser.add_argument('--experiment', choices=['clustering','ahc_threshold','vad_threshold','window','speaker_count','centroid_merge','all'], default='clustering')
+    parser.add_argument('--experiment', choices=['clustering','ahc_threshold','vad_threshold','vad_silence','window','speaker_count','centroid_merge','all'], default='clustering')
     parser.add_argument('--method', choices=['ahc','spectral'], default='ahc')
     parser.add_argument('--threshold', type=float, default=0.65)
     parser.add_argument('--vad_threshold', type=float, default=0.5)
+    parser.add_argument('--vad_min_silence_ms', type=int, default=100)
     parser.add_argument('--window_sec', type=float, default=1.5)
     parser.add_argument('--step_sec', type=float)
     parser.add_argument('--speaker_mode', choices=['known','automatic'], default='automatic')
@@ -138,7 +141,7 @@ def main():
     durations = {key:sf.info(path).duration for key,path in audios.items()}
     set_seed(args.seed)
     encoder = load_model(args.model, args.device)
-    fields = ['method','ahc_threshold','vad_threshold','window_sec','step_sec','speaker_mode',
+    fields = ['method','ahc_threshold','vad_threshold','vad_min_silence_ms','window_sec','step_sec','speaker_mode',
               'centroid_merge','centroid_similarity_threshold','max_small_cluster_size',
               'DER','Miss','FalseAlarm','SpeakerError','SpeakerCountAccuracy','SpeakerCountMAE',
               'OverclusteringRate','UnderclusteringRate','AveragePredictedSpeakers',
@@ -174,7 +177,8 @@ def main():
                             max_speakers=args.max_speakers, encoder=encoder,
                             diagnostics=traces[file_id], centroid_merge=config['centroid_merge'],
                             centroid_similarity_threshold=config['centroid_similarity_threshold'],
-                            max_small_cluster_size=config['max_small_cluster_size'])
+                            max_small_cluster_size=config['max_small_cluster_size'],
+                            vad_min_silence_ms=config['vad_min_silence_ms'])
                 hypotheses[file_id] = parse_rttm(str(rttm)).get(file_id, [])
             result = evaluate_annotations(refs, hypotheses, args.collar, args.skip_overlap, durations)
             save_results(result, folder / 'der.json', folder / 'per_file.csv')
