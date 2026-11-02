@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 import soundfile as sf
 
-from eval.der import evaluate_annotations, load_uem, parse_uem, prepare_evaluation
+from eval.der import evaluate_annotations, load_uem, main as der_main, parse_uem, prepare_evaluation
 from experiments import run_diarization_experiments as runner
 
 
@@ -120,3 +120,18 @@ def test_experiment_runner_records_external_uem(tmp_path, monkeypatch):
     assert manifest['evaluation']['collar'] == 0
     assert manifest['evaluation']['skip_overlap'] is False
     assert list(manifest['evaluation']['uem_sha256']) == [str(uem / 'a.uem')]
+
+
+def test_der_cli_supports_legacy_and_uem_modes(tmp_path, monkeypatch, capsys):
+    ref, hyp = tmp_path / 'ref.rttm', tmp_path / 'hyp.rttm'
+    row = 'SPEAKER a 1 0 1 <NA> <NA> A <NA> <NA>\n'
+    ref.write_text(row)
+    hyp.write_text(row.replace(' A ', ' X '))
+    uem = tmp_path / 'a.uem'
+    uem.write_text('a 1 0 1\n')
+    for extra in ([], ['--uem', str(uem)]):
+        monkeypatch.setattr(sys, 'argv', [
+            'der', '--hyp', str(hyp), '--ref', str(ref), '--collar', '0', *extra,
+        ])
+        der_main()
+        assert 'DER: 0.000 %' in capsys.readouterr().out
