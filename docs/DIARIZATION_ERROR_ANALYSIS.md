@@ -20,11 +20,24 @@ speech-like audio before the first reference segment.
 | `Uaq5N3FbQb4` | 60.054 | 11.210 | 18.7% | 43.122 | 40.822 | 43.550 | 477.18% |
 | `ed0Vt0NxJUI` | 62.749 | 19.671 | 31.3% | 28.381 | 22.200 | 24.406 | 140.88% |
 
-This is strong evidence of incomplete reference coverage, but VAD is not a
-manual transcription. A reviewer should listen to the unannotated leading
-regions and confirm whether they contain speech, music, or another VAD false
-positive. Do not remove the recordings, edit RTTM, or introduce UEM exclusions
-until the annotation semantics are confirmed from the dataset source.
+Manual listening confirms speech in the unannotated leading regions:
+
+| Recording | Manual observation (approximate) |
+| --- | --- |
+| `C4HFERLpRfI` | Speaker 1 from 0:00; speaker 2 from 0:12; speaker 1 laughs near 0:44; speaker 2 resumes near 0:45. |
+| `Uaq5N3FbQb4` | Speaker 1 from 0:00 over background music; speaker 2 begins near 0:36. |
+| `ed0Vt0NxJUI` | Speaker 1 from 0:00; speaker 2 begins near 0:09. |
+
+The review confirms at least two speakers in every recording, so their current
+one-speaker references and full-audio speaker-count classifications are not
+reliable. Background music in `Uaq5N3FbQb4` may account for some VAD activity,
+but not the confirmed speech. These approximate change points are audit
+evidence, not sufficiently precise segment boundaries for rewriting RTTM.
+
+Before rescoring, either complete the references over the entire recordings or,
+if the dataset intentionally annotates only selected regions, obtain the
+intended UEM and score only those regions. Do not remove the recordings, infer
+UEM from observed errors, or edit RTTM from these approximate listening notes.
 
 The three recordings contribute 114.310 of the corpus's 218.273 false-alarm
 seconds (52.37%) while providing only 28.226 scored reference speaker-seconds.
@@ -61,6 +74,23 @@ undercounting. The correct-count subset is not error-free: its largest temporal
 assignment errors are `98EV6H0ZRlU` (15.312 seconds), `B5rLHPUJ8qc` (11.810),
 `jxTaydBnwIg` (9.000), and `XSC94UbpoRQ` (7.250). These are the next recordings
 to inspect for turn-boundary smoothing, mixed windows, or label switches.
+
+Because the three manually reviewed files have unreliable one-speaker labels,
+the count breakdown above is also recalculated without them as a sensitivity
+check:
+
+| Group (97-file diagnostic subset) | Recordings | Reference speaker-seconds | SpeakerError seconds | SpeakerError rate |
+| --- | ---: | ---: | ---: | ---: |
+| Correct predicted count | 60 | 2698.788 | 72.322 | 2.68% |
+| Incorrect predicted count | 37 | 1702.023 | 326.765 | 19.20% |
+| Overcount subset | 23 | 1032.799 | 132.224 | 12.80% |
+| Undercount subset | 14 | 669.224 | 194.540 | 29.07% |
+
+Count accuracy on this subset is 61.86%, with 23.71% overcounting and 14.43%
+undercounting. The conclusion is unchanged: incorrect speaker count is strongly
+associated with SpeakerError, and undercounted files have the highest error
+rate. This exclusion only prevents known-bad count labels from contaminating
+the diagnosis; it is not a replacement evaluation score.
 
 Generate the corpus split without rerunning inference:
 
