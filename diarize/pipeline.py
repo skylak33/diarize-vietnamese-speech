@@ -142,7 +142,12 @@ def diarize(
     if diagnostics is not None:
         diagnostics.update(requested_n_speakers=n_speakers, n_embedding_windows=0,
                            n_clusters_before_postprocess=0, n_speakers_after_postprocess=0,
-                           cluster_sizes=[])
+                           cluster_sizes=[], n_clusters_before_postmerge=0,
+                           n_clusters_after_postmerge=0,
+                           cluster_sizes_before_postmerge=[],
+                           cluster_sizes_after_postmerge=[], merge_attempts=0,
+                           accepted_merges=0, rejected_merges=0,
+                           merge_similarity_scores=[])
     if not 0 < step_sec <= window_sec or not 0 <= vad_threshold <= 1:
         raise ValueError("Require 0 < step_sec <= window_sec and 0 <= vad_threshold <= 1")
     if output_rttm:
@@ -186,8 +191,13 @@ def diarize(
     if n_speakers is not None and n_clusters != n_speakers:
         raise RuntimeError(f"{audio_path}: expected {n_speakers} clusters, got {n_clusters}")
     if diagnostics is not None:
+        sizes = numpy.unique(labels, return_counts=True)[1].tolist()
         diagnostics.update(n_clusters_before_postprocess=n_clusters,
-                           cluster_sizes=numpy.unique(labels, return_counts=True)[1].tolist())
+                           cluster_sizes=sizes,
+                           n_clusters_before_postmerge=n_clusters,
+                           n_clusters_after_postmerge=n_clusters,
+                           cluster_sizes_before_postmerge=sizes,
+                           cluster_sizes_after_postmerge=sizes)
 
     print(f"\n[diarize] === Шаг 5: Постобработка ===")
     labels = smooth_labels(sub_segs, labels, window=3)

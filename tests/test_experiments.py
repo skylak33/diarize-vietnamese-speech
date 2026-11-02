@@ -32,6 +32,14 @@ def test_runner_outputs_and_oracle_count(tmp_path, monkeypatch):
     assert rows[0]['DER']=='0.0' and rows[0]['SpeakerCountAccuracy']=='1.0'
     details=json.loads((out/'config_001'/'der.json').read_text())
     assert details['a']['N_pred']==1
+    diagnostics=list(csv.DictReader((out/'config_001'/'diagnostics.csv').open()))
+    required={'recording_id','model_checkpoint','n_clusters_before_postmerge',
+              'n_clusters_after_postmerge','n_speakers_after_postprocess','DER',
+              'SpeakerError','merge_attempts','accepted_merges','rejected_merges'}
+    assert required <= diagnostics[0].keys()
+    summary=rows[0]
+    assert summary['OverclusteringRate']==summary['UnderclusteringRate']=='0.0'
+    assert summary['AveragePredictedSpeakers']==summary['AverageReferenceSpeakers']=='1.0'
     assert (out/'experiment_manifest.json').is_file()
 
 

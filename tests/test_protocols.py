@@ -55,6 +55,9 @@ def test_controlled_ablation():
     configs=configurations(args)
     assert len(configs) < 20
     assert all(c['step_sec']==c['window_sec']/2 for c in configs)
+    thresholds = [c['ahc_threshold'] for c in configs
+                  if c['method'] == 'ahc' and c['speaker_mode'] == 'automatic']
+    assert {0.65, 0.70, 0.75, 0.80} <= set(thresholds)
 
 
 def test_training_log(tmp_path):

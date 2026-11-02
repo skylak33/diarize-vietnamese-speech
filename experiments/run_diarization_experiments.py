@@ -13,7 +13,7 @@ def configurations(args):
                 step_sec=args.step_sec or args.window_sec / 2, speaker_mode=args.speaker_mode)
     variations = {
         'clustering': ('method', ['ahc', 'spectral']),
-        'ahc_threshold': ('ahc_threshold', [0.45,0.50,0.55,0.60,0.65,0.70,0.75]),
+        'ahc_threshold': ('ahc_threshold', [0.65,0.70,0.75,0.80]),
         'vad_threshold': ('vad_threshold', [0.3,0.4,0.5,0.6,0.7]),
         'window': ('window_sec', [1.,1.5,2.]),
         'speaker_count': ('speaker_mode', ['known','automatic']),
@@ -35,10 +35,48 @@ def configurations(args):
     return configs
 
 
+def diagnostic_row(file_id, model, config, trace, metric):
+    """Combine inference trace and reference metrics without inventing values."""
+    before = trace.get('cluster_sizes_before_postmerge', trace.get('cluster_sizes', []))
+    after = trace.get('cluster_sizes_after_postmerge', before)
+    return dict(
+        recording_id=file_id, model_checkpoint=str(model), method=config['method'],
+        ahc_threshold=config['ahc_threshold'] if config['method'] == 'ahc' else None,
+        window_sec=config['window_sec'], step_sec=config['step_sec'],
+        vad_min_silence_ms=config.get('vad_min_silence_ms', 100),
+        n_embedding_windows=trace.get('n_embedding_windows', 0),
+        n_clusters_before_postmerge=trace.get('n_clusters_before_postmerge', 0),
+        n_clusters_after_postmerge=trace.get('n_clusters_after_postmerge', 0),
+        n_speakers_after_postprocess=trace.get('n_speakers_after_postprocess', 0),
+        cluster_sizes_before_postmerge=before, cluster_sizes_after_postmerge=after,
+        n_singleton_clusters=sum(size == 1 for size in after),
+        n_small_clusters=sum(size <= 4 for size in after),
+        n_ref=metric.get('N_ref'), n_pred=metric.get('N_pred'),
+        speaker_count_absolute_error=metric.get('abs_error'), DER=metric.get('DER'),
+        Miss=metric.get('miss'), FalseAlarm=metric.get('false_alarm'),
+        SpeakerError=metric.get('speaker_error'),
+        merge_attempts=trace.get('merge_attempts', 0),
+        accepted_merges=trace.get('accepted_merges', 0),
+        rejected_merges=trace.get('rejected_merges', 0),
+        merge_similarity_scores=trace.get('merge_similarity_scores', []),
+    )
+
+
+def save_diagnostics(rows, folder):
+    (folder / 'diagnostics.json').write_text(json.dumps(rows, indent=2), encoding='utf-8')
+    with (folder / 'diagnostics.csv').open('w', newline='', encoding='utf-8') as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({key: json.dumps(value) if isinstance(value, list) else value
+                             for key, value in row.items()})
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    for key in ('audio_dir','ref_rttm_dir','model','output_dir'):
+    for key in ('audio_dir','ref_rttm_dir','output_dir'):
         parser.add_argument('--'+key, required=True)
+    parser.add_argument('--model', default='exps/exp1/model/model_0034.model')
     parser.add_argument('--experiment', choices=['clustering','ahc_threshold','vad_threshold','window','speaker_count','all'], default='clustering')
     parser.add_argument('--method', choices=['ahc','spectral'], default='ahc')
     parser.add_argument('--threshold', type=float, default=0.65)
@@ -90,7 +128,9 @@ def main():
     set_seed(args.seed)
     encoder = load_model(args.model, args.device)
     fields = ['method','ahc_threshold','vad_threshold','window_sec','step_sec','speaker_mode',
-              'DER','Miss','FalseAlarm','SpeakerError','SpeakerCountAccuracy','SpeakerCountMAE','config_id']
+              'DER','Miss','FalseAlarm','SpeakerError','SpeakerCountAccuracy','SpeakerCountMAE',
+              'OverclusteringRate','UnderclusteringRate','AveragePredictedSpeakers',
+              'AverageReferenceSpeakers','config_id']
     with (out / 'results.csv').open('w', newline='', encoding='utf-8') as handle:
         writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
@@ -100,6 +140,7 @@ def main():
             folder.mkdir()
             (folder / 'config.json').write_text(json.dumps(config, indent=2), encoding='utf-8')
             hypotheses = {}
+            traces = {}
             for file_id, audio in audios.items():
                 n = speaker_count(refs[file_id]) if config['speaker_mode'] == 'known' else None
                 # Silence has zero reference speakers; an empty hypothesis is the oracle-count case.
@@ -107,19 +148,32 @@ def main():
                 if n == 0:
                     rttm.parent.mkdir(exist_ok=True)
                     rttm.write_text('', encoding='utf-8')
+                    traces[file_id] = dict(n_embedding_windows=0,
+                        n_clusters_before_postmerge=0, n_clusters_after_postmerge=0,
+                        n_speakers_after_postprocess=0, cluster_sizes_before_postmerge=[],
+                        cluster_sizes_after_postmerge=[], merge_attempts=0, accepted_merges=0,
+                        rejected_merges=0, merge_similarity_scores=[])
                 else:
+                    traces[file_id] = {}
                     diarize(str(audio), args.model, n_speakers=n, method=config['method'],
                             threshold=config['ahc_threshold'], vad_threshold=config['vad_threshold'],
                             window_sec=config['window_sec'], step_sec=config['step_sec'],
                             output_rttm=str(rttm), seed=args.seed, device=args.device,
-                            max_speakers=args.max_speakers, encoder=encoder)
+                            max_speakers=args.max_speakers, encoder=encoder,
+                            diagnostics=traces[file_id])
                 hypotheses[file_id] = parse_rttm(str(rttm)).get(file_id, [])
             result = evaluate_annotations(refs, hypotheses, args.collar, args.skip_overlap, durations)
             save_results(result, folder / 'der.json', folder / 'per_file.csv')
+            save_diagnostics([diagnostic_row(file_id, args.model, config, traces[file_id], result[file_id])
+                              for file_id in sorted(audios)], folder)
             total = result['__total__']
             writer.writerow({**config, 'config_id':config_id, 'DER':total['DER'],
                 'Miss':total['miss'], 'FalseAlarm':total['false_alarm'], 'SpeakerError':total['speaker_error'],
-                'SpeakerCountAccuracy':total['speaker_count_accuracy'], 'SpeakerCountMAE':total['speaker_count_mae']})
+                'SpeakerCountAccuracy':total['speaker_count_accuracy'], 'SpeakerCountMAE':total['speaker_count_mae'],
+                'OverclusteringRate':total['overclustering_rate'],
+                'UnderclusteringRate':total['underclustering_rate'],
+                'AveragePredictedSpeakers':total['average_predicted_speakers'],
+                'AverageReferenceSpeakers':total['average_reference_speakers']})
             handle.flush()
             print(f"{config_id}: DER={total['DER']}")
 
