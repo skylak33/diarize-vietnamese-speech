@@ -192,6 +192,8 @@ def cluster_nme_sc(
     """Normalized maximum eigengap spectral clustering (Park et al., 2019)."""
     embeddings = normalize(embeddings, norm="l2")
     n_samples = len(embeddings)
+    if n_speakers == n_samples:
+        return numpy.arange(n_samples)
     if n_samples < 4:
         # The paper searches p in [1, floor(N/4)], which is empty for N < 4.
         return cluster_ahc(embeddings, n_speakers=n_speakers, threshold=0.65)
@@ -199,6 +201,8 @@ def cluster_nme_sc(
     affinity = embeddings @ embeddings.T
     max_neighbors = max(1, n_samples // 4)
     max_clusters = min(max_speakers, n_samples - 1)
+    gap_limit = (max_clusters if n_speakers is None
+                 else min(n_samples - 1, max(max_clusters, n_speakers)))
     best_ratio = numpy.inf
     best_vectors = None
     best_gaps = None
@@ -213,14 +217,22 @@ def cluster_nme_sc(
         laplacian = numpy.diag(adjacency.sum(axis=1)) - adjacency
         eigenvalues, eigenvectors = numpy.linalg.eigh(laplacian)
         eigenvalues = numpy.maximum(eigenvalues, 0.0)
-        gaps = numpy.diff(eigenvalues)[:max_clusters]
-        maximum_gap = float(gaps.max(initial=0.0))
-        normalized_gap = maximum_gap / (float(eigenvalues[-1]) + epsilon)
+        gaps = numpy.diff(eigenvalues)[:gap_limit]
+        candidate_gap = (float(gaps.max(initial=0.0)) if n_speakers is None
+                         else float(gaps[n_speakers - 1]))
+        if (n_speakers is not None
+                and (not numpy.isfinite(candidate_gap) or candidate_gap <= epsilon)):
+            continue
+        normalized_gap = candidate_gap / (float(eigenvalues[-1]) + epsilon)
         ratio = p / normalized_gap if normalized_gap > epsilon else numpy.inf
+        if n_speakers is not None and not numpy.isfinite(ratio):
+            continue
         if best_vectors is None or ratio < best_ratio:
             best_ratio, best_vectors, best_gaps = ratio, eigenvectors, gaps
 
     if best_vectors is None:
+        if n_speakers is not None:
+            return cluster_ahc(embeddings, n_speakers=n_speakers)
         return numpy.zeros(n_samples, dtype=int)
     estimated = int(numpy.argmax(best_gaps) + 1) if best_gaps.max(initial=0.0) > epsilon else 1
     k = n_speakers if n_speakers is not None else estimated
