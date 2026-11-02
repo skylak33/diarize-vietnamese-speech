@@ -89,3 +89,11 @@ UEM result must be labeled as an audit experiment.
    separately until the dataset authors confirm the intended protocol.
 5. Use a separate development set for clustering decisions and a previously
    unused held-out set for final evaluation.
+
+## Project manual-audit reference
+
+The reviewer subsequently validated speaker turns for `C4HFERLpRfI`,
+`Uaq5N3FbQb4`, and `ed0Vt0NxJUI`. The preserved RTTM files are under
+`audit/viyt_manual_reference_20261102`. They are accepted for local analysis but
+remain separate from the published ViYT-Diar reference; derived metrics must be
+labeled accordingly.

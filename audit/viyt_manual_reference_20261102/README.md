@@ -1,8 +1,9 @@
 # ViYT-Diar manual reference audit — 2026-11-02
 
-These three RTTM files preserve reviewer-supplied, one-second-resolution speaker
-turns for sensitivity analysis. They do not replace the published ViYT-Diar
-references.
+These three RTTM files preserve reviewer-validated speaker turns. The reviewer
+confirmed that the supplied boundaries are sufficiently accurate for subsequent
+local evaluation. They do not replace the published ViYT-Diar references, so
+results using them must be identified as using the `manual-audit reference`.
 
 ## Interpretation
 
@@ -14,12 +15,12 @@ references.
   background music.
 - `ed0Vt0NxJUI`: speaker 1 at 0–8 s; speaker 2 at 8–57 s; silence at 57–62 s.
 
-## Limitation
+## Evaluation status
 
-The annotations describe broad speaker turns and do not mark every within-turn
-pause. They are suitable for demonstrating the published-reference coverage
-problem, but not for a final DER claim without frame-accurate speech-boundary
-review.
+These annotations are the accepted project reference for the three audited
+recordings. Their timestamps are expressed to the nearest second, matching the
+manual review. They may be used for local DER analysis as long as results remain
+separate from scores computed against the published ViYT-Diar reference.
 
 ## SHA256
 
