@@ -148,6 +148,7 @@ def diarize(
     vad_min_silence_ms: int = 100,
     vad_min_speech_ms: int = 250,
     vad_speech_pad_ms: int = 30,
+    embedding_cache: dict | None = None,
 ) -> str:
     set_seed(seed)
     if diagnostics is not None:
@@ -160,6 +161,7 @@ def diarize(
                            accepted_merges=0, rejected_merges=0,
                            merge_similarity_scores=[],
                            merge_candidates=[], merge_rejection_reasons={},
+                           embedding_cache_hit=False,
                            centroid_merge_requested=centroid_merge,
                            centroid_merge_skipped_known_count=False)
     if not 0 < step_sec <= window_sec or not 0 <= vad_threshold <= 1:
@@ -173,32 +175,56 @@ def diarize(
     if output_rttm:
         Path(output_rttm).parent.mkdir(parents=True, exist_ok=True)
         Path(output_rttm).write_text("", encoding="utf-8")
-    print(f"\n[diarize] === Шаг 1: Загрузка аудио ===")
-    audio, sr = load_audio(audio_path)
-    duration = len(audio) / sr
-    if duration == 0:
-        raise ValueError(f"Empty audio: {audio_path}")
-    print(f"[diarize] Файл: {audio_path}, длительность: {duration:.1f} сек")
+    cache_key = cached = None
+    if embedding_cache is not None:
+        audio_file = Path(audio_path)
+        audio_stat = audio_file.stat()
+        model_file = Path(model_path)
+        model_stat = model_file.stat() if model_file.is_file() else None
+        cache_key = (
+            str(audio_file.resolve()), audio_stat.st_size, audio_stat.st_mtime_ns,
+            str(model_file.resolve()), model_stat.st_size if model_stat else None,
+            model_stat.st_mtime_ns if model_stat else None,
+            id(encoder) if encoder is not None else None,
+            vad_threshold, vad_min_speech_ms, vad_min_silence_ms, vad_speech_pad_ms,
+            window_sec, step_sec, min_segment_sec, device, seed,
+        )
+        cached = embedding_cache.get(cache_key)
+    if cached is not None:
+        duration, speech_total, sub_segs, embeddings = cached
+        sub_segs, embeddings = list(sub_segs), embeddings.copy()
+        if diagnostics is not None:
+            diagnostics['embedding_cache_hit'] = True
+        print(f"\n[diarize] Embedding cache hit: {audio_path}")
+    else:
+        print(f"\n[diarize] === Шаг 1: Загрузка аудио ===")
+        audio, sr = load_audio(audio_path)
+        duration = len(audio) / sr
+        if duration == 0:
+            raise ValueError(f"Empty audio: {audio_path}")
+        print(f"[diarize] Файл: {audio_path}, длительность: {duration:.1f} сек")
 
-    print(f"\n[diarize] === Шаг 2: VAD ===")
-    speech_segments = get_speech_segments(audio_path, threshold=vad_threshold,
-                                          min_speech_ms=vad_min_speech_ms,
-                                          min_silence_ms=vad_min_silence_ms,
-                                          speech_pad_ms=vad_speech_pad_ms,
-                                          return_seconds=True)
-    speech_total = sum(e - s for s, e in speech_segments)
-    print(f"[diarize] Речевых сегментов: {len(speech_segments)}, "
-          f"суммарно: {speech_total:.1f} сек ({100*speech_total/duration:.0f}%)")
-    if not speech_segments:
-        if n_speakers is not None:
-            raise ValueError(f"{audio_path}: requested {n_speakers} speakers, but VAD found no speech")
-        print("[diarize] Речь не обнаружена.")
-        return ""
+        print(f"\n[diarize] === Шаг 2: VAD ===")
+        speech_segments = get_speech_segments(audio_path, threshold=vad_threshold,
+                                              min_speech_ms=vad_min_speech_ms,
+                                              min_silence_ms=vad_min_silence_ms,
+                                              speech_pad_ms=vad_speech_pad_ms,
+                                              return_seconds=True)
+        speech_total = sum(e - s for s, e in speech_segments)
+        print(f"[diarize] Речевых сегментов: {len(speech_segments)}, "
+              f"суммарно: {speech_total:.1f} сек ({100*speech_total/duration:.0f}%)")
+        if not speech_segments:
+            if n_speakers is not None:
+                raise ValueError(f"{audio_path}: requested {n_speakers} speakers, but VAD found no speech")
+            print("[diarize] Речь не обнаружена.")
+            return ""
 
-    print(f"\n[diarize] === Шаг 3: Извлечение эмбеддингов ===")
-    encoder = encoder if encoder is not None else load_model(model_path, device)
-    sub_segs, embeddings = extract_embeddings_for_segments(
-        encoder, audio, speech_segments, window_sec, step_sec, min_segment_sec)
+        print(f"\n[diarize] === Шаг 3: Извлечение эмбеддингов ===")
+        encoder = encoder if encoder is not None else load_model(model_path, device)
+        sub_segs, embeddings = extract_embeddings_for_segments(
+            encoder, audio, speech_segments, window_sec, step_sec, min_segment_sec)
+        if embedding_cache is not None and len(embeddings):
+            embedding_cache[cache_key] = (duration, speech_total, tuple(sub_segs), embeddings.copy())
     if diagnostics is not None:
         diagnostics['n_embedding_windows'] = len(embeddings)
     if n_speakers is not None and not 1 <= n_speakers <= len(embeddings):

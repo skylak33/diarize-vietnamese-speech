@@ -80,3 +80,25 @@ def test_vad_min_silence_propagation_and_validation(monkeypatch):
         pipeline.diarize('sample.wav','unused',encoder=object(),vad_min_silence_ms=0)
     with pytest.raises(ValueError,match='VAD durations'):
         get_speech_segments('unused',min_silence_ms=0)
+
+
+def test_embedding_cache_reuses_only_compatible_extraction(tmp_path, monkeypatch):
+    audio_path=tmp_path/'sample.wav'; audio_path.write_bytes(b'fixture')
+    calls={'extract':0}
+    monkeypatch.setattr(pipeline,'load_audio',lambda _: (np.zeros(16000),16000))
+    monkeypatch.setattr(pipeline,'get_speech_segments',lambda *args,**kwargs:[(0,1)])
+    def fake_extract(*args,**kwargs):
+        calls['extract']+=1
+        return [(0,1)],np.array([[1.,0.]])
+    monkeypatch.setattr(pipeline,'extract_embeddings_for_segments',fake_extract)
+    cache={}; first={}; second={}; changed={}; encoder=object()
+    pipeline.diarize(str(audio_path),'unused',encoder=encoder,embedding_cache=cache,
+                     diagnostics=first)
+    pipeline.diarize(str(audio_path),'unused',encoder=encoder,embedding_cache=cache,
+                     diagnostics=second)
+    pipeline.diarize(str(audio_path),'unused',encoder=encoder,embedding_cache=cache,
+                     diagnostics=changed,vad_threshold=.6)
+    assert calls['extract']==2
+    assert first['embedding_cache_hit'] is False
+    assert second['embedding_cache_hit'] is True
+    assert changed['embedding_cache_hit'] is False

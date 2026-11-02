@@ -172,11 +172,13 @@ def main():
     durations = {key:sf.info(path).duration for key,path in audios.items()}
     set_seed(args.seed)
     encoder = load_model(args.model, args.device)
+    embedding_cache = {}
     fields = ['method','ahc_threshold','vad_threshold','vad_min_silence_ms','window_sec','step_sec','speaker_mode',
               'centroid_merge','centroid_similarity_threshold','max_small_cluster_size',
               'DER','Miss','FalseAlarm','SpeakerError','SpeakerCountAccuracy','SpeakerCountMAE',
               'OverclusteringRate','UnderclusteringRate','AveragePredictedSpeakers',
-              'AverageReferenceSpeakers','ElapsedSeconds','PeakPythonMemoryMB','config_id']
+              'AverageReferenceSpeakers','EmbeddingCacheHits','ElapsedSeconds',
+              'PeakPythonMemoryMB','config_id']
     with (out / 'results.csv').open('w', newline='', encoding='utf-8') as handle:
         writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
@@ -212,7 +214,8 @@ def main():
                             diagnostics=traces[file_id], centroid_merge=config['centroid_merge'],
                             centroid_similarity_threshold=config['centroid_similarity_threshold'],
                             max_small_cluster_size=config['max_small_cluster_size'],
-                            vad_min_silence_ms=config['vad_min_silence_ms'])
+                            vad_min_silence_ms=config['vad_min_silence_ms'],
+                            embedding_cache=embedding_cache)
                 hypotheses[file_id] = parse_rttm(str(rttm)).get(file_id, [])
             result = evaluate_annotations(refs, hypotheses, args.collar, args.skip_overlap, durations)
             save_results(result, folder / 'der.json', folder / 'per_file.csv')
@@ -228,6 +231,8 @@ def main():
                 'UnderclusteringRate':total['underclustering_rate'],
                 'AveragePredictedSpeakers':total['average_predicted_speakers'],
                 'AverageReferenceSpeakers':total['average_reference_speakers'],
+                'EmbeddingCacheHits':sum(trace.get('embedding_cache_hit', False)
+                                         for trace in traces.values()),
                 'ElapsedSeconds':time.perf_counter() - started,
                 'PeakPythonMemoryMB':peak_memory / (1024 * 1024)})
             handle.flush()

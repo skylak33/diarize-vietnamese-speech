@@ -16,9 +16,11 @@ def test_runner_outputs_and_oracle_count(tmp_path, monkeypatch):
     (ref/'a.rttm').write_text(truth)
     checkpoint=tmp_path/'model.model'; checkpoint.write_bytes(b'synthetic test fixture')
     counts=[]
+    cache_ids=[]
     def fake_diarize(audio_path, model_path, **kwargs):
         from pathlib import Path
         counts.append(kwargs['n_speakers'])
+        cache_ids.append(id(kwargs['embedding_cache']))
         path=Path(kwargs['output_rttm']); path.parent.mkdir(parents=True,exist_ok=True)
         path.write_text(truth)
     monkeypatch.setattr('diarize.pipeline.diarize',fake_diarize)
@@ -28,7 +30,7 @@ def test_runner_outputs_and_oracle_count(tmp_path, monkeypatch):
         '--model',str(checkpoint),'--output_dir',str(out),'--experiment','speaker_count','--collar','0'])
     runner.main()
     rows=list(csv.DictReader((out/'results.csv').open()))
-    assert len(rows)==2 and counts==[1,None]
+    assert len(rows)==2 and counts==[1,None] and len(set(cache_ids))==1
     assert rows[0]['DER']=='0.0' and rows[0]['SpeakerCountAccuracy']=='1.0'
     details=json.loads((out/'config_001'/'der.json').read_text())
     assert details['a']['N_pred']==1
