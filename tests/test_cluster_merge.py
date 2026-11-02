@@ -43,7 +43,7 @@ def test_below_and_exact_threshold():
 
 def test_empty_and_single_cluster_inputs():
     assert merge_similar_clusters(np.empty((0, 2)), np.array([])).dtype.kind == 'i'
-    assert merge_similar_clusters(np.ones((2, 2)), np.array([7, 7])).tolist() == [0, 0]
+    assert merge_similar_clusters(np.ones((2, 2)), np.array([7, 7])).tolist() == [7, 7]
 
 
 @pytest.mark.parametrize('embeddings,labels,error', [
@@ -74,6 +74,14 @@ def test_repeated_execution_is_deterministic_and_does_not_mutate_inputs():
     second = merge_similar_clusters(embeddings, labels, .9)
     assert np.array_equal(first, second)
     assert np.array_equal(labels, original)
+
+
+def test_rejected_merge_preserves_labels_exactly():
+    embeddings = np.array([[1., 0.]] * 5 + [[0., 1.]] * 2)
+    labels = np.array([9] * 5 + [3] * 2)
+    result, trace = merge_similar_clusters(embeddings, labels, .8, return_diagnostics=True)
+    assert np.array_equal(result, labels)
+    assert trace['accepted_merges'] == 0
 
 
 def _mock_pipeline(monkeypatch, embeddings):

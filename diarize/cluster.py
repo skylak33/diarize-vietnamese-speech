@@ -13,12 +13,6 @@ from sklearn.preprocessing import normalize
 from sklearn.metrics import silhouette_score
 
 
-def _canonical_labels(labels: numpy.ndarray) -> numpy.ndarray:
-    mapping = {}
-    return numpy.array([mapping.setdefault(label.item() if hasattr(label, "item") else label,
-                                            len(mapping)) for label in labels], dtype=int)
-
-
 def merge_similar_clusters(
     embeddings: numpy.ndarray,
     labels: numpy.ndarray,
@@ -49,7 +43,7 @@ def merge_similar_clusters(
             or (numpy.linalg.norm(embeddings, axis=1) == 0).any()):
         raise ValueError("Embeddings must be finite nonzero vectors")
 
-    result = _canonical_labels(labels)
+    result = labels.copy()
     while True:
         unique, counts = numpy.unique(result, return_counts=True)
         if len(unique) < 2:
@@ -80,7 +74,6 @@ def merge_similar_clusters(
             diagnostics['merge_similarity_scores'].append(best)
             if best >= similarity_threshold and best - second >= min_similarity_margin:
                 result[result == fragment] = targets[best_index]
-                result = _canonical_labels(result)
                 diagnostics['accepted_merges'] += 1
                 merged = True
                 break
