@@ -63,6 +63,21 @@ def _active_labels(segments, start, end):
     return sorted({label for left, right, label in segments if left < end and right > start})
 
 
+def _complete_mapping(reference, hypothesis, mapping):
+    """Give unmatched hypothesis labels distinct names outside the reference namespace."""
+    result = {str(key): str(value) for key, value in mapping.items()}
+    used = {speaker for _, _, speaker in reference} | set(result.values())
+    for index, speaker in enumerate(sorted({label for _, _, label in hypothesis})):
+        if speaker in result:
+            continue
+        candidate = f'__unmapped_hypothesis_{index}__'
+        while candidate in used:
+            candidate += '_'
+        result[speaker] = candidate
+        used.add(candidate)
+    return result
+
+
 def temporal_error_intervals(reference, hypothesis, effective_uem, mapping):
     """Describe atomic scored intervals from scorer-prepared annotations.
 
@@ -72,6 +87,7 @@ def temporal_error_intervals(reference, hypothesis, effective_uem, mapping):
     """
     reference = _annotation_segments(reference)
     hypothesis = _annotation_segments(hypothesis)
+    mapping = _complete_mapping(reference, hypothesis, mapping)
     uem = _timeline_intervals(effective_uem)
     boundaries = {point for start, end in uem for point in (start, end)}
     for start, end, _ in reference + hypothesis:
@@ -85,7 +101,7 @@ def temporal_error_intervals(reference, hypothesis, effective_uem, mapping):
             continue
         ref_labels = _active_labels(reference, start, end)
         hyp_labels = _active_labels(hypothesis, start, end)
-        mapped_labels = sorted({str(mapping.get(label, label)) for label in hyp_labels})
+        mapped_labels = sorted({mapping[label] for label in hyp_labels})
         if not ref_labels and not hyp_labels:
             continue
         common = set(ref_labels) & set(mapped_labels)
@@ -126,6 +142,8 @@ def speaker_change_boundaries(reference, hypothesis, effective_uem, mapping, tol
     if tolerance < 0:
         raise ValueError('tolerance must be non-negative')
     uem = _timeline_intervals(effective_uem)
+    mapping = _complete_mapping(_annotation_segments(reference),
+                                _annotation_segments(hypothesis), mapping)
 
     def changes(annotation, label_mapping=None):
         segments = _annotation_segments(annotation)
@@ -157,16 +175,20 @@ def speaker_change_boundaries(reference, hypothesis, effective_uem, mapping, tol
 def temporal_diagnostic(reference, hypothesis, effective_uem, mapping,
                         long_error_threshold=2.0, boundary_tolerance=0.25):
     """Serialize scorer-prepared views into deterministic temporal diagnostics."""
-    intervals = temporal_error_intervals(reference, hypothesis, effective_uem, mapping)
+    reference_segments = _annotation_segments(reference)
+    hypothesis_segments = _annotation_segments(hypothesis)
+    mapping = _complete_mapping(reference_segments, hypothesis_segments, mapping)
+    intervals = temporal_error_intervals(reference_segments, hypothesis_segments,
+                                         effective_uem, mapping)
     errors = [interval for interval in intervals if interval['kind'] != 'correct']
     return dict(
         effective_uem=[dict(start=start, end=end) for start, end in _timeline_intervals(effective_uem)],
         reference_intervals=[dict(start=start, end=end, speaker=speaker)
-                             for start, end, speaker in _annotation_segments(reference)],
+                             for start, end, speaker in reference_segments],
         mapped_hypothesis_intervals=[
             dict(start=start, end=end, speaker=speaker,
                  mapped_speaker=str(mapping.get(speaker, speaker)))
-            for start, end, speaker in _annotation_segments(hypothesis)],
+            for start, end, speaker in hypothesis_segments],
         speaker_mapping={str(key): str(value) for key, value in sorted(mapping.items())},
         intervals=intervals,
         error_intervals=errors,

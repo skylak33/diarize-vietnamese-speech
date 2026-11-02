@@ -132,6 +132,19 @@ def test_temporal_components_match_prepared_scorer_view():
     }
 
 
+def test_unmapped_hypothesis_label_cannot_collide_with_reference_label():
+    reference = [(0, 1, 'X')]
+    hypothesis = [(0, 1, 'A'), (0, 1, 'X')]
+    metric = der.evaluate_annotations({'sample': reference}, {'sample': hypothesis}, collar=0,
+                                      durations={'sample': 1})['sample']
+    result = temporal_diagnostic(*der.prepare_evaluation(
+        'sample', reference, hypothesis, collar=0, duration=1))
+    false_alarm = sum(row['speaker_seconds'] for row in result['error_intervals']
+                      if row['kind'] == 'false_alarm')
+    assert false_alarm == metric['false_alarm_seconds'] == 1
+    assert len(set(result['speaker_mapping'].values())) == 2
+
+
 @pytest.mark.skipif(not hasattr(der, 'prepare_evaluation'),
                     reason='UEM preparation contract is integrated by the lead agent')
 def test_external_uem_prepared_view_excludes_outside_speakers():
