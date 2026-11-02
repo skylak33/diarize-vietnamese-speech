@@ -68,6 +68,20 @@ def test_window_ablation_uses_requested_pairs():
         (1.5,.75),(2.,1.),(3.,1.5)]
 
 
+def test_ahc_stability_sweep_is_explicit_and_not_part_of_all():
+    args=Namespace(method='spectral',threshold=.65,vad_threshold=.5,
+                   vad_min_silence_ms=200,window_sec=1.5,step_sec=None,
+                   speaker_mode='known',experiment='ahc_stability')
+    configs=configurations(args)
+    assert [c['ahc_threshold'] for c in configs] == [.70,.72,.74,.75,.77]
+    assert {c['method'] for c in configs} == {'ahc'}
+    assert {c['speaker_mode'] for c in configs} == {'automatic'}
+
+    args.experiment='all'
+    thresholds={c['ahc_threshold'] for c in configurations(args)}
+    assert .72 not in thresholds and .74 not in thresholds and .77 not in thresholds
+
+
 def test_vad_silence_ablation_is_independent():
     args=Namespace(method='ahc',threshold=.65,vad_threshold=.5,vad_min_silence_ms=100,
                    window_sec=1.5,step_sec=None,speaker_mode='automatic',experiment='vad_silence')

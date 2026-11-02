@@ -9,6 +9,9 @@ import tracemalloc
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+AHC_THRESHOLDS = [0.65, 0.70, 0.75, 0.80]
+AHC_STABILITY_THRESHOLDS = [0.70, 0.72, 0.74, 0.75, 0.77]
+
 
 def configurations(args):
     base = dict(method=args.method, ahc_threshold=args.threshold,
@@ -20,20 +23,22 @@ def configurations(args):
                 vad_min_silence_ms=getattr(args, 'vad_min_silence_ms', 100))
     variations = {
         'clustering': ('method', ['ahc', 'spectral', 'nme_sc']),
-        'ahc_threshold': ('ahc_threshold', [0.65,0.70,0.75,0.80]),
+        'ahc_threshold': ('ahc_threshold', AHC_THRESHOLDS),
+        'ahc_stability': ('ahc_threshold', AHC_STABILITY_THRESHOLDS),
         'vad_threshold': ('vad_threshold', [0.3,0.4,0.5,0.6,0.7]),
         'vad_silence': ('vad_min_silence_ms', [100,200,300]),
         'window': ('window_sec', [1.5,2.0,3.0]),
         'speaker_count': ('speaker_mode', ['known','automatic']),
         'centroid_merge': ('centroid_similarity_threshold', [None,0.75,0.80,0.85]),
     }
-    selected = variations if args.experiment == 'all' else [args.experiment]
+    selected = ([name for name in variations if name != 'ahc_stability']
+                if args.experiment == 'all' else [args.experiment])
     configs = []
     for experiment in selected:
         key, values = variations[experiment]
         for value in values:
             config = {**base, key:value}
-            if experiment == 'ahc_threshold':
+            if experiment in {'ahc_threshold', 'ahc_stability'}:
                 config.update(method='ahc', speaker_mode='automatic')
             if experiment == 'centroid_merge':
                 config.update(method='ahc', speaker_mode='automatic', centroid_merge=value is not None)
@@ -118,7 +123,7 @@ def main():
     for key in ('audio_dir','ref_rttm_dir','output_dir'):
         parser.add_argument('--'+key, required=True)
     parser.add_argument('--model', default='exps/exp1/model/model_0034.model')
-    parser.add_argument('--experiment', choices=['clustering','ahc_threshold','vad_threshold','vad_silence','window','speaker_count','centroid_merge','all'], default='clustering')
+    parser.add_argument('--experiment', choices=['clustering','ahc_threshold','ahc_stability','vad_threshold','vad_silence','window','speaker_count','centroid_merge','all'], default='clustering')
     parser.add_argument('--method', choices=['ahc','spectral','nme_sc'], default='ahc')
     parser.add_argument('--threshold', type=float, default=0.65)
     parser.add_argument('--vad_threshold', type=float, default=0.5)
