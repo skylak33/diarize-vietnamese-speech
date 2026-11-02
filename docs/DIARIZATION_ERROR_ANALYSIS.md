@@ -103,6 +103,56 @@ python -m experiments.analyze_diarization_errors \
   --csv results/error_analysis/all.csv --collar 0.25
 ```
 
+## Temporal diagnostics and visualization
+
+Speaker-count status is independent from error observations. The status is one
+of `correct_count`, `overcount`, or `undercount`; `observations` is a validated,
+multi-valued reviewer field such as `speaker_assignment`, `boundary_error`,
+`vad_miss`, `vad_false_alarm`, `possible_mixed_embedding`, `reference_issue`, or
+`unknown`. DER components do not automatically establish any physical cause.
+
+The analyzer uses the scorer-prepared reference, hypothesis, effective UEM,
+collar, overlap policy, and global label mapping. Its JSON contains atomic and
+merged intervals for correct assignments, speaker confusion, missed speech,
+false alarms, long errors, and speaker-change offsets. Overlap is measured in
+speaker-seconds, consistent with pyannote.
+
+Render the four high-error correct-count recordings and all 14 undercounts from
+an existing analysis without rerunning inference:
+
+```powershell
+python -m experiments.visualize_diarization_errors `
+  --diagnostics results/error_analysis/all.json `
+  --output_dir results/error_analysis/correct_count `
+  --recording_id 98EV6H0ZRlU --recording_id B5rLHPUJ8qc `
+  --recording_id jxTaydBnwIg --recording_id XSC94UbpoRQ
+
+python -m experiments.visualize_diarization_errors `
+  --diagnostics results/error_analysis/all.json `
+  --output_dir results/error_analysis/undercount `
+  --speaker_count_status undercount --format png
+```
+
+Pass `--uem data/official_uem` to the analyzer only for an externally supplied,
+protocol-valid UEM. Excluded regions never appear as errors. Timeline figures
+show reference lanes, globally mapped hypothesis lanes, component intervals,
+recording ID, total temporal error, collar, and overlap configuration.
+
+For annotation review, prepare a JSON list with `recording_id`, `audio_path`,
+`reference`, `vad`, `suspected_unannotated`, and `speaker_changes`, then run:
+
+```powershell
+python -m experiments.visualize_diarization_errors `
+  --review_manifest results/error_analysis/reference_review.json `
+  --output_dir results/error_analysis/reference_review
+```
+
+The resulting waveform overlays are review evidence only. VAD regions and
+approximate change markers must not be promoted to ground truth. A human should
+listen, annotate independently, adjudicate disagreements, and preserve proposed
+RTTM/UEM changes as separate versioned artifacts. The published reference must
+remain unchanged until the benchmark owner confirms the intended coverage.
+
 ## Centroid merge diagnostics
 
 Every attempted fragment now records all candidate target cosine similarities,

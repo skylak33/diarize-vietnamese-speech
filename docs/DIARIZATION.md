@@ -68,6 +68,31 @@ python -m diarize.pipeline audio.wav \
   --method nme_sc --seed 42 --output results/audio.rttm
 ```
 
+NME-SC excludes self-similarity from informative graph neighbors. With fewer
+than eight embeddings, `floor(N/4)` does not provide two neighborhood sizes to
+auto-tune, so the backend deterministically uses the existing AHC fallback.
+Explicit speaker counts are preserved. This changes only NME-SC short-recording
+handling; AHC and the original spectral backend are unchanged.
+
+## Evaluation regions
+
+Without UEM, scoring retains the historical full-audio behavior. Use an
+author-provided UEM when the benchmark defines restricted evaluation regions:
+
+```powershell
+python -m eval.der `
+  --hyp_dir results/hypothesis `
+  --ref_dir data/reference `
+  --uem_dir data/official_uem `
+  --collar 0.25
+```
+
+UEM rows use `<recording-id> <channel> <start> <end>`. Multiple, adjacent, and
+overlapping rows are normalized per recording. Missing IDs, invalid timestamps,
+multiple channels, and intervals beyond known audio durations fail explicitly.
+Do not derive UEM from model errors. The ViYT-Diar protocol evidence and open
+questions are recorded in [`VIYT_EVALUATION_PROTOCOL.md`](VIYT_EVALUATION_PROTOCOL.md).
+
 ## YAML configuration
 
 `configs/diarization_default.yaml` is loadable with `--config`. Precedence is:
@@ -104,6 +129,10 @@ python -m experiments.run_diarization_experiments \
   --output_dir results/ahc_sweep \
   --experiment ahc_threshold --device auto --seed 42
 ```
+
+Add `--uem_dir data/official_uem` only when that UEM is part of the benchmark
+protocol. The manifest records `full_audio` or `external_uem`, UEM paths and
+hashes, collar, and overlap handling.
 
 Supported series:
 

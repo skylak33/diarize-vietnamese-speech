@@ -249,6 +249,8 @@ CSV: `epoch,EER,minDCF`. Соседний JSON содержит checkpoints, has
 python eval/der.py --hyp results/audio.rttm --ref data/reference/audio.rttm
 python eval/der.py --hyp_dir results/rttm --ref_dir data/reference_rttm \
   --collar 0.25 --output results/der_results.json --csv results/der_results.csv
+python eval/der.py --hyp_dir results/rttm --ref_dir data/reference_rttm \
+  --uem_dir data/official_uem --collar 0.25
 python eval/der.py --audio audio.wav --model exps/exp1/model/model_0034.model --ref reference.rttm
 ```
 
@@ -269,6 +271,14 @@ overlap exclusions; overlap может давать несколько speaker-s
 Runner знает длительности аудио и оценивает полные записи. Для неполной разметки
 подготовьте полностью размеченную evaluation область; частичный RTTM не задаёт UEM.
 Нулевой знаменатель отображается как `undefined`/JSON `null`, FA seconds сохраняются.
+
+External UEM input is opt-in and strict: every reference recording must have a
+validated UEM entry, intervals are normalized, and supplied audio durations are
+used for bounds checks. Invalid UEM never falls back to full-audio scoring. The
+experiment manifest records the evaluation mode, collar, overlap setting, and
+UEM SHA256 hashes. See
+[`docs/VIYT_EVALUATION_PROTOCOL.md`](docs/VIYT_EVALUATION_PROTOCOL.md) for the
+published-protocol audit and unresolved annotation-coverage questions.
 
 ### Ablation
 
@@ -311,6 +321,8 @@ Accuracy — доля точных совпадений (0–1), MAE — сре�
 
 Полное описание различий AHC distance и centroid cosine similarity, YAML precedence,
 диагностик и команд ViYT-Diar находится в [`docs/DIARIZATION.md`](docs/DIARIZATION.md).
+Temporal SpeakerError intervals and PNG/SVG review workflows are documented in
+[`docs/DIARIZATION_ERROR_ANALYSIS.md`](docs/DIARIZATION_ERROR_ANALYSIS.md).
 
 ### Plots
 
