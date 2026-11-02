@@ -75,6 +75,7 @@ def test_vad_min_silence_propagation_and_validation(monkeypatch):
     monkeypatch.setattr(pipeline,'get_speech_segments',fake_vad)
     assert pipeline.diarize('sample.wav','unused',encoder=object(),vad_min_silence_ms=200) == ''
     assert received['min_silence_ms'] == 200
+    assert received['min_speech_ms'] == 250 and received['speech_pad_ms'] == 30
     with pytest.raises(ValueError,match='positive integer'):
         pipeline.diarize('sample.wav','unused',encoder=object(),vad_min_silence_ms=0)
     with pytest.raises(ValueError,match='VAD durations'):
