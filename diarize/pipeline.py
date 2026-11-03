@@ -18,11 +18,13 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from models.ecapa_tdnn import ECAPA_TDNN
 from utils.model import load_model
 from utils.seed import set_seed
+from utils.provenance import sha256
 from diarize.vad import load_audio, get_speech_segments
 from diarize.cluster import (cluster_embeddings, merge_short_segments,
                              merge_similar_clusters, smooth_labels)
 from diarize.config import (load_config, pipeline_kwargs, set_config_value,
                             validate_config)
+from diarize.embedding_diagnostics import write_artifacts
 
 SAMPLE_RATE = 16000
 
@@ -149,6 +151,9 @@ def diarize(
     vad_min_speech_ms: int = 250,
     vad_speech_pad_ms: int = 30,
     embedding_cache: dict | None = None,
+    diagnostic_output_dir: str | None = None,
+    evaluation_protocol: str | None = None,
+    reference_source: str | None = None,
 ) -> str:
     set_seed(seed)
     if diagnostics is not None:
@@ -233,10 +238,14 @@ def diarize(
     if len(embeddings) == 0:
         print("[diarize] Не удалось извлечь эмбеддинги.")
         return ""
+    embedding_segments = list(sub_segs)
 
     print(f"\n[diarize] === Шаг 4: Кластеризация ===")
-    labels = cluster_embeddings(embeddings, method=method, n_speakers=n_speakers,
-                                threshold=threshold, max_speakers=max_speakers, seed=seed)
+    cluster_trace = {} if diagnostic_output_dir is not None else None
+    initial_labels = cluster_embeddings(embeddings, method=method, n_speakers=n_speakers,
+                                        threshold=threshold, max_speakers=max_speakers, seed=seed,
+                                        diagnostics=cluster_trace)
+    labels = initial_labels.copy()
     n_clusters = len(set(labels))
     if n_speakers is not None and n_clusters != n_speakers:
         raise RuntimeError(f"{audio_path}: expected {n_speakers} clusters, got {n_clusters}")
@@ -260,11 +269,17 @@ def diarize(
                                cluster_sizes_after_postmerge=sizes_after)
     elif centroid_merge and diagnostics is not None:
         diagnostics['centroid_merge_skipped_known_count'] = True
+    labels_after_centroid_merge = labels.copy()
 
     print(f"\n[diarize] === Шаг 5: Постобработка ===")
     labels = smooth_labels(sub_segs, labels, window=3)
+    labels_after_smoothing = labels.copy()
     sub_segs = partition_overlapping_windows(sub_segs)
+    partitioned_segments = list(sub_segs)
+    partitioned_labels = labels.copy()
     sub_segs, labels = merge_short_segments(sub_segs, labels, min_duration=0.3)
+    segments_after_short_merge = list(sub_segs)
+    labels_after_short_merge = labels.copy()
     sub_segs, labels = merge_consecutive_segments(sub_segs, labels, gap_threshold=0.0)
     if diagnostics is not None:
         diagnostics['n_speakers_after_postprocess'] = len(set(labels))
@@ -272,6 +287,40 @@ def diarize(
 
     file_id = os.path.splitext(os.path.basename(audio_path))[0]
     rttm_str = segments_to_rttm(sub_segs, labels, file_id=file_id)
+
+    if diagnostic_output_dir is not None:
+        def stage(segments, stage_labels):
+            return {"segments": [[float(start), float(end)] for start, end in segments],
+                    "labels": [int(label) for label in stage_labels]}
+
+        trace = {"schema_version": 1, "recording_id": file_id,
+                 "stages": {"initial_ahc": {"labels": [int(label) for label in initial_labels]},
+                            "after_centroid_merge": {"labels": [int(label) for label in labels_after_centroid_merge]},
+                            "after_smoothing": {"labels": [int(label) for label in labels_after_smoothing]},
+                            "partitioned_segments": stage(partitioned_segments, partitioned_labels),
+                            "segments_after_short_merge": stage(segments_after_short_merge, labels_after_short_merge),
+                            "final_rttm_segments": stage(sub_segs, labels)}}
+        inference_configuration = {"n_speakers": n_speakers, "method": method, "threshold": threshold,
+            "vad_threshold": vad_threshold, "vad_min_speech_ms": vad_min_speech_ms,
+            "vad_min_silence_ms": vad_min_silence_ms, "vad_speech_pad_ms": vad_speech_pad_ms,
+            "window_sec": window_sec, "step_sec": step_sec, "min_segment_sec": min_segment_sec,
+            "max_speakers": max_speakers, "centroid_merge": centroid_merge,
+            "centroid_similarity_threshold": centroid_similarity_threshold,
+            "max_small_cluster_size": max_small_cluster_size,
+            "centroid_similarity_margin": centroid_similarity_margin, "device": device}
+        config = {"schema_version": 1, "recording_id": file_id,
+                  "audio_sha256": sha256(audio_path) if Path(audio_path).is_file() else None,
+                  "checkpoint_sha256": sha256(model_path) if Path(model_path).is_file() else None,
+                  "seed": seed, "inference_configuration": inference_configuration}
+        if evaluation_protocol is not None:
+            config["evaluation_protocol"] = evaluation_protocol
+        if reference_source is not None:
+            config["reference_source"] = reference_source
+        write_artifacts(Path(diagnostic_output_dir) / file_id, embeddings, embedding_segments, trace, config)
+        artifact_dir = Path(diagnostic_output_dir) / file_id
+        if cluster_trace:
+            (artifact_dir / "ahc_merges.json").write_text(
+                json.dumps(cluster_trace, indent=2, sort_keys=True), encoding="utf-8")
 
     if output_rttm:
         with open(output_rttm, "w") as f:
@@ -295,6 +344,9 @@ def parse_cli_args(argv=None):
     parser.add_argument("--vad_min_silence_ms", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--vad_speech_pad_ms", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--output", type=str)
+    parser.add_argument("--diagnostic_output_dir")
+    parser.add_argument("--evaluation_protocol")
+    parser.add_argument("--reference_source")
     parser.add_argument("--window_sec", type=float, default=argparse.SUPPRESS)
     parser.add_argument("--step_sec", type=float, default=argparse.SUPPRESS)
     parser.add_argument("--min_segment_sec", type=float, default=argparse.SUPPRESS)
@@ -329,6 +381,8 @@ def parse_cli_args(argv=None):
     validate_config(config)
     effective = argparse.Namespace(audio=args.audio, model=args.model,
         config=args.config, n_speakers=args.n_speakers, output=args.output,
+        diagnostic_output_dir=args.diagnostic_output_dir,
+        evaluation_protocol=args.evaluation_protocol, reference_source=args.reference_source,
         **pipeline_kwargs(config))
     return effective, config
 
@@ -356,6 +410,9 @@ if __name__ == "__main__":
         min_segment_sec=args.min_segment_sec,
         vad_min_speech_ms=args.vad_min_speech_ms,
         vad_speech_pad_ms=args.vad_speech_pad_ms,
+        diagnostic_output_dir=args.diagnostic_output_dir,
+        evaluation_protocol=args.evaluation_protocol,
+        reference_source=args.reference_source,
     )
     print("\n=== RTTM ===")
     print(rttm)
