@@ -167,6 +167,13 @@ See [`DIARIZATION_ERROR_ANALYSIS.md`](DIARIZATION_ERROR_ANALYSIS.md) for the
 reference-coverage audit, SpeakerError count split, centroid rejection evidence,
 and the development-only AHC stability workflow.
 
+The optional embedding/pipeline diagnostic workflow is documented in
+[`EMBEDDING_ERROR_ANALYSIS.md`](EMBEDDING_ERROR_ANALYSIS.md). It records the
+actual AHC merge hierarchy, intermediate labels, reference-overlap classes,
+counterfactual postprocessing traces, and four reproducible plots. Diagnostic
+artifacts are provenance-bound and must not be used to tune production settings
+on the previously used ViYT-Diar test set.
+
 ## ViYT-Diar exploratory measurements
 
 The historical baseline and the new runs use all 100 ViYT-Diar test recordings

@@ -216,3 +216,18 @@ records `embedding_cache_hit`.
 A one-recording GPU smoke run measured 3.045 seconds for initial extraction and
 0.013–0.016 seconds for each of three compatible centroid configurations. These
 timings validate cache behavior only; they are not corpus quality measurements.
+
+## Embedding-stage diagnostics
+
+For stage-level attribution, use
+[`EMBEDDING_ERROR_ANALYSIS.md`](EMBEDDING_ERROR_ANALYSIS.md). The companion
+workflow preserves the production RTTM while exporting normalized ECAPA windows,
+the exact AHC merge hierarchy, postprocessing labels, reference-overlap
+classifications, and optional smoothing/short-merge counterfactuals. It also
+defines the four plots and the required audio/checkpoint/configuration hashes.
+
+At the time of this documentation update, the epoch-34 checkpoint is present but
+the 19 target recording WAVs are unavailable. Consequently their embedding,
+AHC, and postprocessing evidence remains `unknown`; the repository's synthetic
+tests validate implementation behavior only. Do not interpret the historical
+correct-count/undercount/overcount ledger as newly measured results.

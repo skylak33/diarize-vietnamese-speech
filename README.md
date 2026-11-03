@@ -15,6 +15,7 @@ AHC/spectral clustering → RTTM. Архитектура ECAPA-TDNN сохран
 - `utils/`: metrics, audio decoding, model/device loading, seeds, provenance.
 - `configs/`: проверяемые YAML-конфигурации с приоритетом CLI → YAML → defaults.
 - `docs/DIARIZATION.md`: overclustering, режимы inference и воспроизводимые ablations.
+- `docs/EMBEDDING_ERROR_ANALYSIS.md`: optional embedding/AHC/postprocessing diagnostics and PowerShell workflow.
 - `tests/`: CPU unit tests на синтетических данных без скачивания датасетов.
 
 ## Установка
@@ -401,6 +402,23 @@ python diarize/pipeline.py --help
 python diarize/rttm_convert.py to_audacity results/audio.rttm results/labels.txt
 python diarize/rttm_convert.py to_rttm results/labels.txt results/audio.rttm --file_id audio
 ```
+
+### Embedding diagnostics
+
+The optional diagnostic mode writes normalized embedding windows, intermediate
+pipeline labels, the exact AHC merge trace, and reproducibility metadata while
+preserving the baseline RTTM. It can also emit smoothing and short-segment
+counterfactuals. Run the complete Windows PowerShell workflow in
+[`docs/EMBEDDING_ERROR_ANALYSIS.md`](docs/EMBEDDING_ERROR_ANALYSIS.md). The
+visualizer produces a chronological similarity heatmap, speaker timeline,
+similarity distributions, and AHC dendrogram from saved artifacts without
+rerunning ECAPA.
+
+The current checkout contains the diagnostic implementation and synthetic tests;
+the checkpoint is present but the 19 target recording WAVs are unavailable.
+Therefore no new real-data embedding, clustering, or root-cause findings are
+claimed. The existing ViYT-Diar test set was already used for exploratory tuning
+and must not be used to select new production parameters.
 
 ## Какие измерения нужны для НИР
 
