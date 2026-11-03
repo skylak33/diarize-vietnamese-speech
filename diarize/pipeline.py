@@ -152,6 +152,7 @@ def diarize(
     vad_speech_pad_ms: int = 30,
     embedding_cache: dict | None = None,
     diagnostic_output_dir: str | None = None,
+    diagnostic_counterfactuals: bool = False,
     evaluation_protocol: str | None = None,
     reference_source: str | None = None,
 ) -> str:
@@ -177,6 +178,8 @@ def diarize(
         raise ValueError("vad_min_speech_ms must be a positive integer")
     if not isinstance(vad_speech_pad_ms, int) or vad_speech_pad_ms < 0:
         raise ValueError("vad_speech_pad_ms must be a non-negative integer")
+    if diagnostic_counterfactuals and diagnostic_output_dir is None:
+        raise ValueError("diagnostic_counterfactuals requires diagnostic_output_dir")
     if output_rttm:
         Path(output_rttm).parent.mkdir(parents=True, exist_ok=True)
         Path(output_rttm).write_text("", encoding="utf-8")
@@ -307,7 +310,8 @@ def diarize(
             "max_speakers": max_speakers, "centroid_merge": centroid_merge,
             "centroid_similarity_threshold": centroid_similarity_threshold,
             "max_small_cluster_size": max_small_cluster_size,
-            "centroid_similarity_margin": centroid_similarity_margin, "device": device}
+            "centroid_similarity_margin": centroid_similarity_margin, "device": device,
+            "diagnostic_counterfactuals": diagnostic_counterfactuals}
         config = {"schema_version": 1, "recording_id": file_id,
                   "audio_sha256": sha256(audio_path) if Path(audio_path).is_file() else None,
                   "checkpoint_sha256": sha256(model_path) if Path(model_path).is_file() else None,
@@ -321,6 +325,34 @@ def diarize(
         if cluster_trace:
             (artifact_dir / "ahc_merges.json").write_text(
                 json.dumps(cluster_trace, indent=2, sort_keys=True), encoding="utf-8")
+        if diagnostic_counterfactuals:
+            counterfactual_dir = Path(diagnostic_output_dir) / "counterfactuals" / file_id
+            counterfactual_dir.mkdir(parents=True, exist_ok=True)
+
+            def counterfactual(use_smoothing, use_short_merge):
+                alternative_segments = list(embedding_segments)
+                alternative_labels = labels_after_centroid_merge.copy()
+                if use_smoothing:
+                    alternative_labels = smooth_labels(
+                        alternative_segments, alternative_labels, window=3)
+                alternative_segments = partition_overlapping_windows(alternative_segments)
+                if use_short_merge:
+                    alternative_segments, alternative_labels = merge_short_segments(
+                        alternative_segments, alternative_labels, min_duration=0.3)
+                return merge_consecutive_segments(
+                    alternative_segments, alternative_labels, gap_threshold=0.0)
+
+            variants = {"baseline": (sub_segs, labels)}
+            variants["without_temporal_smoothing"] = counterfactual(False, True)
+            variants["without_short_segment_merging"] = counterfactual(True, False)
+            counterfactual_trace = {}
+            for name, (variant_segments, variant_labels) in variants.items():
+                variant_rttm = segments_to_rttm(variant_segments, variant_labels, file_id=file_id)
+                (counterfactual_dir / f"{name}.rttm").write_text(
+                    variant_rttm + ("\n" if variant_rttm else ""), encoding="utf-8")
+                counterfactual_trace[name] = stage(variant_segments, variant_labels)
+            (counterfactual_dir / "pipeline_trace.json").write_text(
+                json.dumps(counterfactual_trace, indent=2, sort_keys=True), encoding="utf-8")
 
     if output_rttm:
         with open(output_rttm, "w") as f:
@@ -345,6 +377,7 @@ def parse_cli_args(argv=None):
     parser.add_argument("--vad_speech_pad_ms", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--output", type=str)
     parser.add_argument("--diagnostic_output_dir")
+    parser.add_argument("--diagnostic_counterfactuals", action="store_true")
     parser.add_argument("--evaluation_protocol")
     parser.add_argument("--reference_source")
     parser.add_argument("--window_sec", type=float, default=argparse.SUPPRESS)
@@ -382,6 +415,7 @@ def parse_cli_args(argv=None):
     effective = argparse.Namespace(audio=args.audio, model=args.model,
         config=args.config, n_speakers=args.n_speakers, output=args.output,
         diagnostic_output_dir=args.diagnostic_output_dir,
+        diagnostic_counterfactuals=args.diagnostic_counterfactuals,
         evaluation_protocol=args.evaluation_protocol, reference_source=args.reference_source,
         **pipeline_kwargs(config))
     return effective, config
@@ -411,6 +445,7 @@ if __name__ == "__main__":
         vad_min_speech_ms=args.vad_min_speech_ms,
         vad_speech_pad_ms=args.vad_speech_pad_ms,
         diagnostic_output_dir=args.diagnostic_output_dir,
+        diagnostic_counterfactuals=args.diagnostic_counterfactuals,
         evaluation_protocol=args.evaluation_protocol,
         reference_source=args.reference_source,
     )
