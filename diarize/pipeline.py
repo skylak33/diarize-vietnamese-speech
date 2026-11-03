@@ -27,6 +27,7 @@ from diarize.config import (load_config, pipeline_kwargs, set_config_value,
 from diarize.embedding_diagnostics import write_artifacts
 
 SAMPLE_RATE = 16000
+ENCODER_SOURCE_PATH = Path(sys.modules[ECAPA_TDNN.__module__].__file__)
 
 
 def extract_embedding(encoder: ECAPA_TDNN, audio: numpy.ndarray,
@@ -193,6 +194,7 @@ def diarize(
             str(audio_file.resolve()), audio_stat.st_size, audio_stat.st_mtime_ns,
             str(model_file.resolve()), model_stat.st_size if model_stat else None,
             model_stat.st_mtime_ns if model_stat else None,
+            sha256(ENCODER_SOURCE_PATH),
             id(encoder) if encoder is not None else None,
             vad_threshold, vad_min_speech_ms, vad_min_silence_ms, vad_speech_pad_ms,
             window_sec, step_sec, min_segment_sec, device, seed,
@@ -315,6 +317,7 @@ def diarize(
         config = {"schema_version": 1, "recording_id": file_id,
                   "audio_sha256": sha256(audio_path) if Path(audio_path).is_file() else None,
                   "checkpoint_sha256": sha256(model_path) if Path(model_path).is_file() else None,
+                  "encoder_source_sha256": sha256(ENCODER_SOURCE_PATH),
                   "seed": seed, "inference_configuration": inference_configuration,
                   "evaluation_protocol": evaluation_protocol, "reference_source": reference_source}
         write_artifacts(Path(diagnostic_output_dir) / file_id, embeddings, embedding_segments, trace, config)

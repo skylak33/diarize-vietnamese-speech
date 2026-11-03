@@ -112,6 +112,11 @@ def test_embedding_cache_reuses_only_compatible_extraction(tmp_path, monkeypatch
     model_trace={}; traces.append(model_trace)
     pipeline.diarize(str(audio_path),str(model_path),encoder=encoder,
                      embedding_cache=cache,diagnostics=model_trace)
+    encoder_source=tmp_path/'ecapa.py'; encoder_source.write_bytes(b'corrected source')
+    monkeypatch.setattr(pipeline,'ENCODER_SOURCE_PATH',encoder_source)
+    source_trace={}; traces.append(source_trace)
+    pipeline.diarize(str(audio_path),str(model_path),encoder=encoder,
+                     embedding_cache=cache,diagnostics=source_trace)
     audio_path.write_bytes(b'changed audio fixture')
     audio_trace={}; traces.append(audio_trace)
     pipeline.diarize(str(audio_path),str(model_path),encoder=encoder,

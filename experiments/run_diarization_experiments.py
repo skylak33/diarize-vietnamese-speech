@@ -17,10 +17,15 @@ def configurations(args):
     base = dict(method=args.method, ahc_threshold=args.threshold,
                 vad_threshold=args.vad_threshold, window_sec=args.window_sec,
                 step_sec=args.step_sec or args.window_sec / 2, speaker_mode=args.speaker_mode,
+                min_segment_sec=args.min_segment_sec,
+                vad_min_speech_ms=args.vad_min_speech_ms,
+                vad_speech_pad_ms=args.vad_speech_pad_ms,
                 centroid_merge=getattr(args, 'centroid_merge', False),
                 centroid_similarity_threshold=getattr(args, 'centroid_similarity_threshold', 0.80),
                 max_small_cluster_size=getattr(args, 'max_small_cluster_size', 4),
                 vad_min_silence_ms=getattr(args, 'vad_min_silence_ms', 100))
+    if args.experiment == 'baseline':
+        return [base]
     variations = {
         'clustering': ('method', ['ahc', 'spectral', 'nme_sc']),
         'ahc_threshold': ('ahc_threshold', AHC_THRESHOLDS),
@@ -123,13 +128,16 @@ def main():
     for key in ('audio_dir','ref_rttm_dir','output_dir'):
         parser.add_argument('--'+key, required=True)
     parser.add_argument('--model', default='exps/exp1/model/model_0034.model')
-    parser.add_argument('--experiment', choices=['clustering','ahc_threshold','ahc_stability','vad_threshold','vad_silence','window','speaker_count','centroid_merge','all'], default='clustering')
+    parser.add_argument('--experiment', choices=['baseline','clustering','ahc_threshold','ahc_stability','vad_threshold','vad_silence','window','speaker_count','centroid_merge','all'], default='clustering')
     parser.add_argument('--method', choices=['ahc','spectral','nme_sc'], default='ahc')
     parser.add_argument('--threshold', type=float, default=0.65)
     parser.add_argument('--vad_threshold', type=float, default=0.5)
     parser.add_argument('--vad_min_silence_ms', type=int, default=100)
+    parser.add_argument('--vad_min_speech_ms', type=int, default=250)
+    parser.add_argument('--vad_speech_pad_ms', type=int, default=30)
     parser.add_argument('--window_sec', type=float, default=1.5)
     parser.add_argument('--step_sec', type=float)
+    parser.add_argument('--min_segment_sec', type=float, default=0.5)
     parser.add_argument('--speaker_mode', choices=['known','automatic'], default='automatic')
     parser.add_argument('--max_speakers', type=int, default=10)
     parser.add_argument('--centroid_merge', action='store_true')
@@ -140,6 +148,9 @@ def main():
     parser.add_argument('--uem_dir', help='Optional directory of official UEM files')
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--device', choices=['auto','cpu','cuda'], default='auto')
+    parser.add_argument('--recording_ids', nargs='+')
+    parser.add_argument('--diagnostic_output_dir')
+    parser.add_argument('--diagnostic_ids', nargs='+')
     parser.add_argument('--dry_run', action='store_true', help='Print configurations without loading audio/model')
     parser.add_argument('--max_configs', type=int, default=32, help='Abort if plan exceeds limit')
     args = parser.parse_args()
@@ -165,6 +176,13 @@ def main():
         if path.stem in audios:
             raise ValueError(f'Duplicate audio recording ID: {path.stem}')
         audios[path.stem] = path
+    if args.recording_ids:
+        requested = set(args.recording_ids)
+        missing = requested - refs.keys() | requested - audios.keys()
+        if missing:
+            raise ValueError(f'Requested recording IDs are unavailable: {sorted(missing)}')
+        refs = {key: refs[key] for key in sorted(requested)}
+        audios = {key: audios[key] for key in sorted(requested)}
     if refs.keys() != audios.keys():
         raise ValueError(f'Audio/reference IDs differ; missing audio={refs.keys()-audios.keys()}, missing reference={audios.keys()-refs.keys()}')
     if uem_data is not None and uem_data.keys() != refs.keys():
@@ -174,19 +192,23 @@ def main():
     if (out / 'experiment_manifest.json').exists():
         raise FileExistsError('Output already contains an experiment; choose a new --output_dir')
     uem_files = sorted(Path(args.uem_dir).rglob('*.uem')) if args.uem_dir else []
-    metadata = dict(arguments=vars(args), configurations=configs, environment=environment(),
+    encoder_source = Path(__file__).resolve().parents[1] / 'models' / 'ecapa_tdnn.py'
+    metadata = dict(status='running', arguments=vars(args), configurations=configs, environment=environment(),
                     model_sha256=sha256(args.model),
+                    encoder_source=str(encoder_source), encoder_source_sha256=sha256(encoder_source),
                     audio_sha256={k:sha256(v) for k,v in audios.items()},
-                    reference_sha256={str(p):sha256(p) for p in sorted(Path(args.ref_rttm_dir).rglob('*.rttm'))},
+                    reference_sha256={k:sha256(Path(args.ref_rttm_dir) / f'{k}.rttm') for k in refs},
                     evaluation=dict(mode='external_uem' if uem_data is not None else 'full_audio',
                                     collar=args.collar, skip_overlap=args.skip_overlap,
                                     uem_sha256={str(p):sha256(p) for p in uem_files}))
     (out / 'experiment_manifest.json').write_text(json.dumps(metadata, indent=2), encoding='utf-8')
+    (out / 'manifest.json').write_text(json.dumps(metadata, indent=2), encoding='utf-8')
     durations = {key:sf.info(path).duration for key,path in audios.items()}
     set_seed(args.seed)
     encoder = load_model(args.model, args.device)
     embedding_cache = {}
-    fields = ['method','ahc_threshold','vad_threshold','vad_min_silence_ms','window_sec','step_sec','speaker_mode',
+    fields = ['method','ahc_threshold','vad_threshold','vad_min_speech_ms','vad_min_silence_ms',
+              'vad_speech_pad_ms','window_sec','step_sec','min_segment_sec','speaker_mode',
               'centroid_merge','centroid_similarity_threshold','max_small_cluster_size',
               'DER','Miss','FalseAlarm','SpeakerError','SpeakerCountAccuracy','SpeakerCountMAE',
               'OverclusteringRate','UnderclusteringRate','AveragePredictedSpeakers',
@@ -199,15 +221,19 @@ def main():
             started = time.perf_counter()
             tracemalloc.start()
             config_id = f'config_{index:03d}'
-            folder = out / config_id
-            folder.mkdir()
+            baseline = args.experiment == 'baseline'
+            folder = out if baseline else out / config_id
+            if not baseline:
+                folder.mkdir()
             (folder / 'config.json').write_text(json.dumps(config, indent=2), encoding='utf-8')
             hypotheses = {}
             traces = {}
+            runtimes = {}
             for file_id, audio in audios.items():
+                recording_started = time.perf_counter()
                 n = speaker_count(refs[file_id]) if config['speaker_mode'] == 'known' else None
                 # Silence has zero reference speakers; an empty hypothesis is the oracle-count case.
-                rttm = folder / 'rttm' / (file_id + '.rttm')
+                rttm = folder / ('hypothesis_rttm' if baseline else 'rttm') / (file_id + '.rttm')
                 if n == 0:
                     rttm.parent.mkdir(exist_ok=True)
                     rttm.write_text('', encoding='utf-8')
@@ -228,14 +254,43 @@ def main():
                             centroid_similarity_threshold=config['centroid_similarity_threshold'],
                             max_small_cluster_size=config['max_small_cluster_size'],
                             vad_min_silence_ms=config['vad_min_silence_ms'],
-                            embedding_cache=embedding_cache)
+                            vad_min_speech_ms=config['vad_min_speech_ms'],
+                            vad_speech_pad_ms=config['vad_speech_pad_ms'],
+                            min_segment_sec=config['min_segment_sec'], embedding_cache=embedding_cache,
+                            diagnostic_output_dir=(args.diagnostic_output_dir
+                                if args.diagnostic_output_dir and
+                                (not args.diagnostic_ids or file_id in args.diagnostic_ids) else None),
+                            evaluation_protocol='published_reference_full_audio',
+                            reference_source=str(Path(args.ref_rttm_dir).resolve()))
                 hypotheses[file_id] = parse_rttm(str(rttm)).get(file_id, [])
+                runtimes[file_id] = time.perf_counter() - recording_started
             result = evaluate_annotations(refs, hypotheses, args.collar, args.skip_overlap,
                                           durations, uem_data)
             save_results(result, folder / 'der.json', folder / 'per_file.csv')
-            save_diagnostics([diagnostic_row(file_id, args.model, config, traces[file_id], result[file_id])
-                              for file_id in sorted(audios)], folder)
+            diagnostic_rows = [diagnostic_row(file_id, args.model, config, traces[file_id], result[file_id])
+                               for file_id in sorted(audios)]
+            save_diagnostics(diagnostic_rows, folder)
             total = result['__total__']
+            if baseline:
+                recording_rows = []
+                for file_id in sorted(audios):
+                    metric = result[file_id]
+                    recording_rows.append(dict(recording_id=file_id,
+                        audio_sha256=metadata['audio_sha256'][file_id],
+                        reference_sha256=metadata['reference_sha256'][file_id],
+                        rttm_sha256=sha256(folder / 'hypothesis_rttm' / f'{file_id}.rttm'),
+                        effective_configuration=config, speaker_count=metric['N_pred'],
+                        metrics=metric, runtime_seconds=runtimes[file_id], failure=None))
+                (folder / 'recording_results.json').write_text(
+                    json.dumps(recording_rows, indent=2), encoding='utf-8')
+                flat_rows = [{**{key:value for key,value in row.items()
+                               if key not in {'effective_configuration','metrics'}}, **row['metrics']}
+                             for row in recording_rows]
+                with (folder / 'recording_results.csv').open('w', newline='', encoding='utf-8') as result_handle:
+                    result_writer = csv.DictWriter(result_handle, fieldnames=list(flat_rows[0]))
+                    result_writer.writeheader(); result_writer.writerows(flat_rows)
+                (folder / 'corpus_results.json').write_text(
+                    json.dumps(total, indent=2), encoding='utf-8')
             _, peak_memory = tracemalloc.get_traced_memory()
             tracemalloc.stop()
             writer.writerow({**config, 'config_id':config_id, 'DER':total['DER'],
@@ -250,6 +305,10 @@ def main():
                 'ElapsedSeconds':time.perf_counter() - started,
                 'PeakPythonMemoryMB':peak_memory / (1024 * 1024)})
             handle.flush()
+            if baseline:
+                metadata.update(status='complete', files_evaluated=len(audios), failures=[])
+                for manifest_name in ('experiment_manifest.json', 'manifest.json'):
+                    (out / manifest_name).write_text(json.dumps(metadata, indent=2), encoding='utf-8')
             print(f"{config_id}: DER={total['DER']}")
 
 

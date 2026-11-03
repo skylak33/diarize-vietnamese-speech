@@ -35,7 +35,7 @@ def test_diagnostic_artifacts_are_deterministic_and_preserve_rttm(tmp_path, monk
     assert np.allclose(np.linalg.norm(saved["embeddings"], axis=1), 1)
     assert saved["window_starts"].tolist() == [0., 1.]
     assert trace["stages"]["initial_ahc"]["labels"] == [0, 1]
-    assert config["audio_sha256"] and config["checkpoint_sha256"]
+    assert config["audio_sha256"] and config["checkpoint_sha256"] and config["encoder_source_sha256"]
 
 
 def test_similarity_statistics_and_reference_overlap():
