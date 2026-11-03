@@ -22,9 +22,10 @@ With diagnostics enabled, inference writes
 `<diagnostic_output_dir>/<recording_id>/` containing:
 
 - `embeddings.npz`: CPU NumPy embeddings and window start/end times;
-- `pipeline_trace.json`: configuration, hashes, labels after AHC, centroid
-  merge, smoothing, partitioning, short-segment merging, and final RTTM;
-- `config.json`: reproducibility metadata;
+- `pipeline_trace.json`: labels after AHC, centroid merge, smoothing,
+  partitioning, short-segment merging, and final RTTM;
+- `config.json`: input hashes, effective configuration, protocol, reference
+  source, and seed;
 - `ahc_merges.json`: the recorded hierarchy, children, distances, merge steps,
   and cluster sizes.
 
@@ -55,12 +56,13 @@ The visualizer produces four independent views:
 
 ## Windows PowerShell workflow
 
-Run from the repository root. Replace only the input WAV and output locations;
-the commands contain no machine-specific absolute paths.
+Run from the repository root. Replace the input WAV/reference and output
+locations; the commands contain no machine-specific absolute paths.
 
 ```powershell
 $audio = "data\recordings\98EV6H0ZRlU.wav"
 $model = "exps\exp1\model\model_0034.model"
+$referenceRttm = "data\references"
 $artifacts = "results\embedding_analysis"
 
 python -m diarize.pipeline $audio `
@@ -68,10 +70,13 @@ python -m diarize.pipeline $audio `
   --method ahc --threshold 0.75 `
   --output "$artifacts\98EV6H0ZRlU.rttm" `
   --diagnostic_output_dir $artifacts `
-  --diagnostic_counterfactuals
+  --diagnostic_counterfactuals `
+  --evaluation_protocol "ViYT-Diar collar=0.25 include-overlap" `
+  --reference_source published_reference
 
 python -m experiments.analyze_embedding_diagnostics `
   --artifacts $artifacts `
+  --reference_rttm $referenceRttm `
   --recording_id 98EV6H0ZRlU `
   --output_dir $artifacts
 
