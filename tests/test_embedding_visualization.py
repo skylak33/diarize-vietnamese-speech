@@ -10,6 +10,7 @@ def _artifacts(path):
              window_starts=np.array([0., 1., 2.]), window_ends=np.array([1., 2., 3.]))
     (path / 'pipeline_trace.json').write_text(json.dumps({
         'schema_version': 1,
+        'recording_id': 'sample',
         'stages': {'initial_ahc': {'labels': [0, 0, 1]}, 'after_smoothing': [0, 0, 1]},
         'partitioned_segments': [[0, 1, 0], [1, 2, 0], [2, 3, 1]],
         'segments_after_short_merge': [[0, 2, 0], [2, 3, 1]],
@@ -30,14 +31,17 @@ def test_cli_writes_all_primary_pngs(tmp_path):
         assert (output / f'{name}.png').stat().st_size > 100
 
 
-def test_cli_writes_all_svgs_without_reference(tmp_path):
+def test_cli_loads_reference_rttm_and_writes_all_svgs(tmp_path):
     _artifacts(tmp_path)
     trace = json.loads((tmp_path / 'pipeline_trace.json').read_text(encoding='utf-8'))
     trace.pop('reference')
     (tmp_path / 'pipeline_trace.json').write_text(json.dumps(trace), encoding='utf-8')
-    main([str(tmp_path), '--format', 'svg'])
+    reference = tmp_path / 'reference.rttm'
+    reference.write_text('SPEAKER sample 1 0 1.5 <NA> <NA> A <NA> <NA>\n', encoding='utf-8')
+    main([str(tmp_path), '--format', 'svg', '--reference_rttm', str(reference)])
     for name in ('similarity_heatmap', 'speaker_timeline', 'similarity_distributions', 'ahc_dendrogram'):
         assert (tmp_path / f'{name}.svg').stat().st_size > 100
+    assert 'Reference' in (tmp_path / 'speaker_timeline.svg').read_text(encoding='utf-8')
 
 
 def test_dendrogram_rejects_incomplete_real_hierarchy(tmp_path):

@@ -7,6 +7,8 @@ import matplotlib
 matplotlib.use('Agg')
 import numpy as np
 
+from eval.der import load_rttm
+
 
 STAGES = ('initial_ahc', 'after_centroid_merge', 'after_smoothing')
 COLORS = ('#1976d2', '#00897b', '#ef6c00', '#8e24aa', '#d81b60', '#546e7a')
@@ -232,8 +234,15 @@ def main(argv=None):
     parser.add_argument('artifact_dir')
     parser.add_argument('--output_dir')
     parser.add_argument('--format', choices=('png', 'svg'), default='png')
+    parser.add_argument('--reference_rttm')
     args = parser.parse_args(argv)
     data = load_artifacts(args.artifact_dir)
+    if args.reference_rttm:
+        recording_id = data['trace'].get('recording_id', Path(args.artifact_dir).name)
+        references = load_rttm(args.reference_rttm)
+        if recording_id not in references:
+            parser.error(f'Reference RTTM has no recording {recording_id}')
+        data['trace']['reference'] = references[recording_id]
     output_dir = Path(args.output_dir or args.artifact_dir)
     suffix = args.format
     plot_similarity_heatmap(data['embeddings'], output_dir / f'similarity_heatmap.{suffix}', _reference(data['trace']),
