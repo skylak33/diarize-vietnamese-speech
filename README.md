@@ -414,11 +414,17 @@ visualizer produces a chronological similarity heatmap, speaker timeline,
 similarity distributions, and AHC dendrogram from saved artifacts without
 rerunning ECAPA.
 
-The current checkout contains the diagnostic implementation and synthetic tests;
-the checkpoint is present but the 19 target recording WAVs are unavailable.
-Therefore no new real-data embedding, clustering, or root-cause findings are
-claimed. The existing ViYT-Diar test set was already used for exploratory tuning
-and must not be used to select new production parameters.
+The checkpoint audit found a checkpoint-architecture compatibility error in the
+Res2Net blocks: the checkpoint was trained with `Conv -> ReLU -> BatchNorm`, while
+the affected inference source used `Conv -> BatchNorm -> ReLU`. Strict loading
+cannot detect this operation-order mismatch because parameter names and shapes are
+unchanged. The production order is now restored and protected by a regression
+test. All embeddings and downstream results produced by the wrong-order encoder
+must be regenerated; this fix is not evidence of improved diarization quality.
+See [`docs/ECAPA_CHECKPOINT_AUDIT.md`](docs/ECAPA_CHECKPOINT_AUDIT.md).
+
+The existing ViYT-Diar test set was already used for exploratory analysis and
+must not be used to select new production parameters.
 
 ## Какие измерения нужны для НИР
 

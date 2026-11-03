@@ -1,20 +1,29 @@
 # ECAPA embedding and diarization error analysis
 
-## Implementation status versus experimental findings
+## Checkpoint compatibility correction
 
-The diagnostic implementation is present in the current commits. It can write
-per-recording artifacts, trace AHC and temporal stages, compute similarity
-statistics, and render four plots. The checkpoint
-`exps/exp1/model/model_0034.model` is present in this checkout. The 19 target
-recordings listed below are not available as local WAV inputs, so no real-data
-embedding, AHC, or postprocessing findings are claimed here. The WAV files
-under third-party package test directories are unrelated fixtures.
+The 19-recording diagnostic run used an encoder whose Res2Net blocks applied
+`Conv -> BatchNorm -> ReLU`. Checkpoint training and historical source commit
+`a78321de6c46e86161099e99f3170ea2032d4403` use
+`Conv -> ReLU -> BatchNorm`. Strict state-dictionary loading did not detect the
+semantic mismatch because the same layers, names, and tensor shapes exist in
+both graphs.
 
-The current test suite exercises synthetic inputs only. Synthetic diagnostic
-tests are implemented and can be run now; target-recording analysis is pending
-until the corresponding WAV/reference inputs are supplied. A successful test
-run therefore demonstrates implementation behavior, not speaker separation on
-ViYT-Diar.
+The saved 1,317 embeddings have a normalized centroid norm of `0.998002` and
+were reproduced exactly by the wrong-order audit variant. They are valid
+evidence about that faulty inference graph, but are invalid for assessing the
+corrected encoder. Their one-speaker RTTMs, DER, SpeakerError, similarity
+statistics, and AHC traces must not be presented as corrected-model results.
+Regenerate embeddings before any new clustering or evaluation. The compatibility
+fix itself is not a measured quality improvement.
+
+The audit also corrected the distribution-overlap estimator. Across the same 19
+wrong-order artifacts, fixed-range overlap was `1.0` for every recording, while
+adaptive overlap ranged from `0.553817` to `0.914706` (median `0.837309`). The
+diagnostic AUC calculation was unchanged (range `0.470921`-`0.734056`, median
+`0.583723`). These pairwise statistics are descriptive because overlapping
+windows and repeated pairs are dependent. Full methodology and reproduction
+commands are in [ECAPA_CHECKPOINT_AUDIT.md](ECAPA_CHECKPOINT_AUDIT.md).
 
 ## Diagnostic architecture
 
@@ -104,34 +113,33 @@ diagnostics, and do not report counterfactual DER as a new production result.
 Use a speaker-disjoint development set and an untouched held-out test set for
 future selection.
 
-## Target recording ledger
+## Pre-correction recording ledger
 
-All rows below are intentionally marked `not run / WAV unavailable`. Evidence is
-`unknown`; no cause is inferred from the speaker-count group. `N_ref = 2` and
-`N_pred = 1` are historical group labels for the 14 undercount cases, not new
-measurements in this checkout.
+The following labels describe the original investigation plan and wrong-order
+run. They are retained only to identify the recordings; none is a corrected-model
+result. Regenerate the complete corpus before updating speaker counts or DER.
 
 | Recording | Group | Status | Evidence | Notes |
 | --- | --- | --- | --- | --- |
-| `98EV6H0ZRlU` | correct count | not run / WAV unavailable | unknown | pending WAV/reference |
-| `B5rLHPUJ8qc` | correct count | not run / WAV unavailable | unknown | pending WAV/reference |
-| `jxTaydBnwIg` | correct count | not run / WAV unavailable | unknown | pending WAV/reference |
-| `XSC94UbpoRQ` | correct count | not run / WAV unavailable | unknown | pending WAV/reference |
-| `Hx0j-Oc18do` | undercount | not run / WAV unavailable | unknown | historical N_ref=2, N_pred=1 |
-| `9lm02QThHjo` | undercount | not run / WAV unavailable | unknown | historical N_ref=2, N_pred=1 |
-| `sVPA0POzHFQ` | undercount | not run / WAV unavailable | unknown | historical N_ref=2, N_pred=1 |
-| `IZxOT44FKsU` | undercount | not run / WAV unavailable | unknown | historical N_ref=2, N_pred=1 |
-| `HTwksOmzTsc` | undercount | not run / WAV unavailable | unknown | historical N_ref=2, N_pred=1 |
-| `kmP3mlKeGRY` | undercount | not run / WAV unavailable | unknown | historical N_ref=2, N_pred=1 |
-| `_5qHkZ0miYY` | undercount | not run / WAV unavailable | unknown | historical N_ref=2, N_pred=1 |
-| `XJG-o9BK4To` | undercount | not run / WAV unavailable | unknown | historical N_ref=2, N_pred=1 |
-| `lDvnabH6iyY` | undercount | not run / WAV unavailable | unknown | historical N_ref=2, N_pred=1 |
-| `kkPMThxTwq0` | undercount | not run / WAV unavailable | unknown | historical N_ref=2, N_pred=1 |
-| `hRYWiO-zi5s` | undercount | not run / WAV unavailable | unknown | historical N_ref=2, N_pred=1 |
-| `kBbOVOaU6cc` | undercount | not run / WAV unavailable | unknown | historical N_ref=2, N_pred=1 |
-| `LNdIO_4fRuI` | undercount | not run / WAV unavailable | unknown | historical N_ref=2, N_pred=1 |
-| `sxOvp1cgE14` | undercount | not run / WAV unavailable | unknown | historical N_ref=2, N_pred=1 |
-| `jE9ZB-zqEgs` | overcount | not run / WAV unavailable | unknown | additional case; pending WAV/reference |
+| `98EV6H0ZRlU` | historical comparison | invalidated | wrong-order embeddings | regenerate |
+| `B5rLHPUJ8qc` | historical comparison | invalidated | wrong-order embeddings | regenerate |
+| `jxTaydBnwIg` | historical comparison | invalidated | wrong-order embeddings | regenerate |
+| `XSC94UbpoRQ` | historical comparison | invalidated | wrong-order embeddings | regenerate |
+| `Hx0j-Oc18do` | wrong-order undercount | invalidated | wrong-order embeddings | regenerate |
+| `9lm02QThHjo` | wrong-order undercount | invalidated | wrong-order embeddings | regenerate |
+| `sVPA0POzHFQ` | wrong-order undercount | invalidated | wrong-order embeddings | regenerate |
+| `IZxOT44FKsU` | wrong-order undercount | invalidated | wrong-order embeddings | regenerate |
+| `HTwksOmzTsc` | wrong-order undercount | invalidated | wrong-order embeddings | regenerate |
+| `kmP3mlKeGRY` | wrong-order undercount | invalidated | wrong-order embeddings | regenerate |
+| `_5qHkZ0miYY` | wrong-order undercount | invalidated | wrong-order embeddings | regenerate |
+| `XJG-o9BK4To` | wrong-order undercount | invalidated | wrong-order embeddings | regenerate |
+| `lDvnabH6iyY` | wrong-order undercount | invalidated | wrong-order embeddings | regenerate |
+| `kkPMThxTwq0` | wrong-order undercount | invalidated | wrong-order embeddings | regenerate |
+| `hRYWiO-zi5s` | wrong-order undercount | invalidated | wrong-order embeddings | regenerate |
+| `kBbOVOaU6cc` | wrong-order undercount | invalidated | wrong-order embeddings | regenerate |
+| `LNdIO_4fRuI` | wrong-order undercount | invalidated | wrong-order embeddings | regenerate |
+| `sxOvp1cgE14` | wrong-order undercount | invalidated | wrong-order embeddings | regenerate |
+| `jE9ZB-zqEgs` | historical comparison | invalidated | wrong-order embeddings | regenerate |
 
 Manual references may contain broad turns with pauses and are not guaranteed
 frame-perfect speech activity. Published and manually audited references must
