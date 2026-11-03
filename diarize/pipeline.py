@@ -315,11 +315,8 @@ def diarize(
         config = {"schema_version": 1, "recording_id": file_id,
                   "audio_sha256": sha256(audio_path) if Path(audio_path).is_file() else None,
                   "checkpoint_sha256": sha256(model_path) if Path(model_path).is_file() else None,
-                  "seed": seed, "inference_configuration": inference_configuration}
-        if evaluation_protocol is not None:
-            config["evaluation_protocol"] = evaluation_protocol
-        if reference_source is not None:
-            config["reference_source"] = reference_source
+                  "seed": seed, "inference_configuration": inference_configuration,
+                  "evaluation_protocol": evaluation_protocol, "reference_source": reference_source}
         write_artifacts(Path(diagnostic_output_dir) / file_id, embeddings, embedding_segments, trace, config)
         artifact_dir = Path(diagnostic_output_dir) / file_id
         if cluster_trace:

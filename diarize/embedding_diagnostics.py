@@ -40,6 +40,17 @@ def _summary(values):
             "std": float(values.std()), "quantiles": [float(x) for x in np.quantile(values, [.05, .25, .75, .95])]}
 
 
+def _distribution_overlap(left, right):
+    """Return histogram overlap in [0, 1], or None for an empty distribution."""
+    left, right = np.asarray(left, dtype=float), np.asarray(right, dtype=float)
+    if not len(left) or not len(right):
+        return None
+    bins = min(50, max(2, int(np.sqrt(len(left) + len(right)))))
+    counts_left, edges = np.histogram(left, bins=bins, range=(-1, 1))
+    counts_right, _ = np.histogram(right, bins=edges)
+    return float(np.minimum(counts_left / len(left), counts_right / len(right)).sum())
+
+
 def cluster_similarity_stats(embeddings, labels, max_windows=None):
     """Summarize predicted-cluster cohesion and temporal-neighbor similarity."""
     embeddings, _, _ = validate_embeddings(embeddings)
@@ -66,8 +77,10 @@ def cluster_similarity_stats(embeddings, labels, max_windows=None):
         choices = [(float(centroid_matrix[i, j]), unique[j].item() if hasattr(unique[j], "item") else unique[j])
                    for j in range(len(unique)) if j != i]
         nearest[str(label)] = None if not choices else {"label": max(choices)[1], "similarity": max(choices)[0]}
-    return {"within_predicted_cluster": _summary(matrix[same & upper]),
-            "between_predicted_cluster": _summary(matrix[~same & upper]),
+    within, between = matrix[same & upper], matrix[~same & upper]
+    return {"within_predicted_cluster": _summary(within),
+            "between_predicted_cluster": _summary(between),
+            "predicted_distribution_overlap": _distribution_overlap(within, between),
             "adjacent_windows": _summary(np.diag(matrix, 1)),
             "cluster_sizes": {str(label): int(count) for label, count in zip(unique, counts)},
             "centroid_similarity": centroid_matrix.tolist(), "compactness": compactness,
@@ -86,15 +99,21 @@ def classify_reference_windows(window_starts, window_ends, reference_segments, m
     result = []
     for start, end in zip(starts, ends):
         overlaps = {}
+        active = []
         for ref_start, ref_end, speaker in reference_segments:
             overlap = max(0., min(end, ref_end) - max(start, ref_start))
             if overlap:
                 overlaps[speaker] = overlaps.get(speaker, 0.) + overlap
+                active.append((max(start, ref_start), min(end, ref_end), speaker))
         duration = end - start
         total, best = sum(overlaps.values()), max(overlaps, key=overlaps.get, default=None)
+        has_overlap = any(
+            left_speaker != right_speaker and max(left_start, right_start) < min(left_end, right_end)
+            for index, (left_start, left_end, left_speaker) in enumerate(active)
+            for right_start, right_end, right_speaker in active[index + 1:])
         if not overlaps:
             kind = "unannotated_window"
-        elif total > duration + 1e-9:
+        elif has_overlap:
             kind = "overlapping_speech_window"
         elif overlaps[best] / duration >= min_coverage and len(overlaps) == 1:
             kind = "unambiguous_speaker_window"
@@ -123,6 +142,7 @@ def reference_similarity_stats(embeddings, classifications, max_windows=None):
         comparisons = np.asarray(same)[:, None] - np.asarray(different)[None, :]
         auc = float((comparisons > 0).mean() + .5 * (comparisons == 0).mean())
     return {"same_speaker_similarity": _summary(same), "different_speaker_similarity": _summary(different),
+            "distribution_overlap": _distribution_overlap(same, different),
             "diagnostic_auc": auc}
 
 
