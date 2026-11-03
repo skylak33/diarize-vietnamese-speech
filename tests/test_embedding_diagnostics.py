@@ -3,7 +3,8 @@ import json
 import numpy as np
 
 from diarize import pipeline
-from diarize.embedding_diagnostics import (classify_reference_windows, cluster_similarity_stats,
+from diarize.embedding_diagnostics import (_distribution_comparison, _distribution_overlap,
+                                           classify_reference_windows, cluster_similarity_stats,
                                            cosine_similarity_matrix, reference_similarity_stats,
                                            validate_embeddings, write_artifacts)
 
@@ -56,6 +57,9 @@ def test_similarity_statistics_and_reference_overlap():
     reference = reference_similarity_stats(embeddings, windows)
     assert reference["same_speaker_similarity"]["count"] == 0
     assert reference["different_speaker_similarity"]["count"] == 1
+    assert reference["diagnostic_auc"] is None
+    assert reference["distribution_overlap"] is None
+    assert reference["ks_statistic"] is None
 
 
 def test_embedding_validation_and_reference_classes_cover_edge_cases():
@@ -78,6 +82,38 @@ def test_embedding_validation_and_reference_classes_cover_edge_cases():
     partial_overlap = classify_reference_windows(
         [0.], [1.], [(0., .7, "A"), (.5, .8, "B")])
     assert partial_overlap[0]["classification"] == "overlapping_speech_window"
+
+
+def test_distribution_comparison_resolves_narrow_ranges_and_degenerate_samples():
+    left = np.array([.9950, .9970, .9990])
+    right = np.array([.9951, .9971, .9991])
+    assert _distribution_overlap(left, right) < 1.
+    assert _distribution_overlap([.997], [.997]) == 1.
+    assert _distribution_overlap([.997], [.998]) == 0.
+
+    comparison = _distribution_comparison([1., 2.], [0., 1.])
+    assert comparison["ks_statistic"] == .5
+    assert comparison["wasserstein_distance"] == 1.
+    assert comparison["median_separation"] == 1.
+    assert comparison["pairwise_ranking_auc"] == .875
+
+
+def test_reference_intervals_are_unioned_per_speaker_without_double_counting():
+    classifications = classify_reference_windows(
+        [0., 1.], [1., 2.],
+        [(0., 1., "A"), (0., 1., "A"), (1., 1.5, "A"), (1.5, 2., "B")])
+    assert classifications[0] == {
+        "classification": "unambiguous_speaker_window", "speaker": "A", "coverage": 1.}
+    assert classifications[1]["classification"] == "mixed_speaker_window"
+
+
+def test_diagnostic_auc_remains_tie_aware_pairwise_ranking_probability():
+    embeddings = np.array([[1., 0.], [1., 0.], [0., 1.], [1., 0.]])
+    classifications = [
+        {"classification": "unambiguous_speaker_window", "speaker": speaker}
+        for speaker in ("A", "A", "B", "B")]
+    stats = reference_similarity_stats(embeddings, classifications)
+    assert stats["diagnostic_auc"] == stats["pairwise_ranking_auc"] == .5
 
 
 def test_reference_source_is_metadata_and_cannot_change_diagnostic_rttm(tmp_path, monkeypatch):

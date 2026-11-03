@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import numpy as np
+from scipy.stats import ks_2samp, wasserstein_distance
 
 
 def validate_embeddings(embeddings, window_starts=None, window_ends=None):
@@ -41,14 +42,56 @@ def _summary(values):
 
 
 def _distribution_overlap(left, right):
-    """Return histogram overlap in [0, 1], or None for an empty distribution."""
+    """Estimate overlap from shared equal-width bins spanning the pooled data range."""
     left, right = np.asarray(left, dtype=float), np.asarray(right, dtype=float)
     if not len(left) or not len(right):
         return None
-    bins = min(50, max(2, int(np.sqrt(len(left) + len(right)))))
-    counts_left, edges = np.histogram(left, bins=bins, range=(-1, 1))
+    if not np.isfinite(left).all() or not np.isfinite(right).all():
+        raise ValueError("distributions must contain only finite values")
+    combined = np.concatenate((left, right))
+    lower, upper = combined.min(), combined.max()
+    if lower == upper:
+        return 1.
+    edges = np.histogram_bin_edges(combined, bins="fd", range=(lower, upper))
+    bin_count = min(50, max(2, len(edges) - 1))
+    edges = np.linspace(np.nextafter(lower, -np.inf), np.nextafter(upper, np.inf), bin_count + 1)
+    counts_left, _ = np.histogram(left, bins=edges)
     counts_right, _ = np.histogram(right, bins=edges)
     return float(np.minimum(counts_left / len(left), counts_right / len(right)).sum())
+
+
+def _pairwise_ranking_auc(left, right):
+    """Return P(left > right) + 0.5 P(left == right), without independence claims."""
+    if not len(left) or not len(right):
+        return None
+    ordered = np.sort(right)
+    lower = np.searchsorted(ordered, left, side="left")
+    upper = np.searchsorted(ordered, left, side="right")
+    return float(np.mean((lower + .5 * (upper - lower)) / len(ordered)))
+
+
+def _distribution_comparison(left, right):
+    """Compare empirical samples descriptively; dependent pairs receive no p-values."""
+    left, right = np.asarray(left, dtype=float), np.asarray(right, dtype=float)
+    if not len(left) or not len(right):
+        return {"distribution_overlap": None, "ks_statistic": None,
+                "wasserstein_distance": None, "median_separation": None,
+                "quantile_separation": {}, "pairwise_ranking_auc": None}
+    if not np.isfinite(left).all() or not np.isfinite(right).all():
+        raise ValueError("distributions must contain only finite values")
+    quantiles = [.05, .25, .5, .75, .95]
+    separation = np.quantile(left, quantiles) - np.quantile(right, quantiles)
+    return {
+        "distribution_overlap": _distribution_overlap(left, right),
+        "ks_statistic": float(ks_2samp(left, right).statistic),
+        "wasserstein_distance": float(wasserstein_distance(left, right)),
+        "median_separation": float(np.median(left) - np.median(right)),
+        "quantile_separation": {
+            f"q{int(quantile * 100):02d}": float(value)
+            for quantile, value in zip(quantiles, separation)
+        },
+        "pairwise_ranking_auc": _pairwise_ranking_auc(left, right),
+    }
 
 
 def cluster_similarity_stats(embeddings, labels, max_windows=None):
@@ -98,19 +141,31 @@ def classify_reference_windows(window_starts, window_ends, reference_segments, m
         raise ValueError("reference segments must be finite positive intervals")
     result = []
     for start, end in zip(starts, ends):
-        overlaps = {}
-        active = []
+        intervals = {}
         for ref_start, ref_end, speaker in reference_segments:
-            overlap = max(0., min(end, ref_end) - max(start, ref_start))
-            if overlap:
-                overlaps[speaker] = overlaps.get(speaker, 0.) + overlap
-                active.append((max(start, ref_start), min(end, ref_end), speaker))
+            clipped = max(start, ref_start), min(end, ref_end)
+            if clipped[1] > clipped[0]:
+                intervals.setdefault(speaker, []).append(clipped)
+        active = {}
+        for speaker, speaker_intervals in intervals.items():
+            merged = []
+            for interval_start, interval_end in sorted(speaker_intervals):
+                if merged and interval_start <= merged[-1][1]:
+                    merged[-1] = merged[-1][0], max(merged[-1][1], interval_end)
+                else:
+                    merged.append((interval_start, interval_end))
+            active[speaker] = merged
+        overlaps = {speaker: sum(right - left for left, right in speaker_intervals)
+                    for speaker, speaker_intervals in active.items()}
         duration = end - start
         total, best = sum(overlaps.values()), max(overlaps, key=overlaps.get, default=None)
+        active_intervals = list(active.values())
         has_overlap = any(
-            left_speaker != right_speaker and max(left_start, right_start) < min(left_end, right_end)
-            for index, (left_start, left_end, left_speaker) in enumerate(active)
-            for right_start, right_end, right_speaker in active[index + 1:])
+            max(left_start, right_start) < min(left_end, right_end)
+            for index, left_intervals in enumerate(active_intervals)
+            for right_intervals in active_intervals[index + 1:]
+            for left_start, left_end in left_intervals
+            for right_start, right_end in right_intervals)
         if not overlaps:
             kind = "unannotated_window"
         elif has_overlap:
@@ -127,7 +182,7 @@ def classify_reference_windows(window_starts, window_ends, reference_segments, m
 
 
 def reference_similarity_stats(embeddings, classifications, max_windows=None):
-    """Compare only windows with unambiguous reference-speaker coverage."""
+    """Compare validated windows; AUC is the tie-aware same-vs-different ranking probability."""
     if len(embeddings) != len(classifications):
         raise ValueError("classifications must match embeddings")
     matrix = cosine_similarity_matrix(embeddings, max_windows)
@@ -137,13 +192,9 @@ def reference_similarity_stats(embeddings, classifications, max_windows=None):
     for position, (i, speaker) in enumerate(reliable):
         for j, other in reliable[position + 1:]:
             (same if speaker == other else different).append(matrix[i, j])
-    auc = None
-    if same and different:
-        comparisons = np.asarray(same)[:, None] - np.asarray(different)[None, :]
-        auc = float((comparisons > 0).mean() + .5 * (comparisons == 0).mean())
+    comparison = _distribution_comparison(same, different)
     return {"same_speaker_similarity": _summary(same), "different_speaker_similarity": _summary(different),
-            "distribution_overlap": _distribution_overlap(same, different),
-            "diagnostic_auc": auc}
+            **comparison, "diagnostic_auc": comparison["pairwise_ranking_auc"]}
 
 
 def write_artifacts(output_dir, embeddings, segments, trace, config):
