@@ -10,8 +10,10 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from diarize.cluster import cluster_ahc
 from diarize.embedding_diagnostics import classify_reference_windows, reference_similarity_stats
 from eval.der import load_rttm
+from experiments.audit_ecapa_checkpoint import representation_stats
 
 
 def _aggregate(rows, field):
@@ -23,20 +25,44 @@ def _aggregate(rows, field):
     }
 
 
+def center_and_normalize(embeddings, centroid):
+    """Subtract a fixed centroid and L2-normalize nonzero residuals."""
+    embeddings, centroid = np.asarray(embeddings, dtype=float), np.asarray(centroid, dtype=float)
+    if embeddings.ndim != 2 or centroid.shape != (embeddings.shape[1],):
+        raise ValueError("centroid must match a 2-D embedding matrix")
+    residuals = embeddings - centroid
+    norms = np.linalg.norm(residuals, axis=1, keepdims=True)
+    if not np.isfinite(residuals).all() or (norms <= np.finfo(float).eps).any():
+        raise ValueError("centering produced a nonfinite or zero residual")
+    return residuals / norms
+
+
 def audit(artifacts, reference_rttm, output_dir, min_coverage=.8):
     """Write one row per recording plus aggregate descriptive ranges."""
     artifacts, output_dir = Path(artifacts), Path(output_dir)
     references = load_rttm(reference_rttm)
+    directories = [path for path in sorted(artifacts.iterdir())
+                   if path.is_dir() and (path / "embeddings.npz").is_file() and path.name in references]
+    saved_embeddings = []
+    for directory in directories:
+        with np.load(directory / "embeddings.npz") as arrays:
+            saved_embeddings.append(arrays["embeddings"])
+    if not saved_embeddings:
+        raise ValueError("no saved embeddings match the reference RTTM")
+    all_embeddings = np.concatenate(saved_embeddings)
+    test_estimated_centroid = all_embeddings.mean(axis=0)
+    all_centered = center_and_normalize(all_embeddings, test_estimated_centroid)
     rows = []
-    for directory in sorted(path for path in artifacts.iterdir() if path.is_dir()):
+    for directory in directories:
         embeddings_path = directory / "embeddings.npz"
         previous_path = directory / "similarity_stats.json"
-        if not embeddings_path.is_file() or directory.name not in references:
-            continue
         with np.load(embeddings_path) as arrays:
             classifications = classify_reference_windows(
                 arrays["window_starts"], arrays["window_ends"], references[directory.name], min_coverage)
-            stats = reference_similarity_stats(arrays["embeddings"], classifications)
+            embeddings = arrays["embeddings"]
+            centered = center_and_normalize(embeddings, test_estimated_centroid)
+            stats = reference_similarity_stats(embeddings, classifications)
+            centered_stats = reference_similarity_stats(centered, classifications)
         previous = (json.loads(previous_path.read_text(encoding="utf-8"))
                     .get("reference_speaker_similarity", {}) if previous_path.is_file() else {})
         counts = {}
@@ -56,6 +82,16 @@ def audit(artifacts, reference_rttm, output_dir, min_coverage=.8):
                for key, value in stats["quantile_separation"].items()},
             "old_diagnostic_auc": previous.get("diagnostic_auc"),
             "diagnostic_auc": stats["diagnostic_auc"],
+            "same_similarity_mean": stats["same_speaker_similarity"]["mean"],
+            "different_similarity_mean": stats["different_speaker_similarity"]["mean"],
+            "original_ahc_speakers": int(len(np.unique(cluster_ahc(embeddings, threshold=.75)))),
+            "centered_same_similarity_mean": centered_stats["same_speaker_similarity"]["mean"],
+            "centered_different_similarity_mean": centered_stats["different_speaker_similarity"]["mean"],
+            "centered_adaptive_overlap": centered_stats["distribution_overlap"],
+            "centered_ks_statistic": centered_stats["ks_statistic"],
+            "centered_wasserstein_distance": centered_stats["wasserstein_distance"],
+            "centered_diagnostic_auc": centered_stats["diagnostic_auc"],
+            "centered_ahc_speakers": int(len(np.unique(cluster_ahc(centered, threshold=.75)))),
             "window_classifications": counts,
         }
         rows.append(row)
@@ -64,9 +100,14 @@ def audit(artifacts, reference_rttm, output_dir, min_coverage=.8):
         "adaptive_overlap", "ks_statistic", "wasserstein_distance", "median_separation",
         "quantile_separation_q05", "quantile_separation_q25", "quantile_separation_q50",
         "quantile_separation_q75", "quantile_separation_q95", "old_diagnostic_auc",
-        "diagnostic_auc", "window_classifications",
+        "diagnostic_auc", "same_similarity_mean", "different_similarity_mean",
+        "original_ahc_speakers", "centered_same_similarity_mean",
+        "centered_different_similarity_mean", "centered_adaptive_overlap",
+        "centered_ks_statistic", "centered_wasserstein_distance",
+        "centered_diagnostic_auc", "centered_ahc_speakers", "window_classifications",
     ]
-    metrics = fields[3:-1]
+    metrics = [field for field in fields if field not in {
+        "recording_id", "same_pairs", "different_pairs", "window_classifications"}]
     payload = {
         "schema_version": 1,
         "recording_count": len(rows),
@@ -74,6 +115,13 @@ def audit(artifacts, reference_rttm, output_dir, min_coverage=.8):
             "adaptive_overlap": "Pooled-data bounds, shared equal-width Freedman-Diaconis bins capped at 50.",
             "diagnostic_auc": "P(same-speaker similarity > different-speaker similarity) plus half of ties.",
             "dependence": "Statistics are descriptive; overlapping windows and repeated pairs are not independent.",
+        },
+        "exploratory_test_estimated_centering": {
+            "warning": "The centroid is estimated from the same reused ViYT-Diar test artifacts. Results are exploratory geometry diagnostics, not unbiased validation or a production recommendation.",
+            "centroid_norm": float(np.linalg.norm(test_estimated_centroid)),
+            "original_geometry": representation_stats(all_embeddings),
+            "centered_geometry": representation_stats(all_centered),
+            "ahc_threshold": .75,
         },
         "aggregate": {field: _aggregate(rows, field) for field in metrics},
         "recordings": rows,

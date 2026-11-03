@@ -72,6 +72,8 @@ def representation_stats(values):
 
 def summary(values):
     values = np.asarray(values, dtype=np.float64)
+    if not len(values):
+        return None
     return {
         "min": float(values.min()),
         "median": float(np.median(values)),
