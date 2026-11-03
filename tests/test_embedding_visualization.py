@@ -30,13 +30,14 @@ def test_cli_writes_all_primary_pngs(tmp_path):
         assert (output / f'{name}.png').stat().st_size > 100
 
 
-def test_cli_writes_svg_without_reference(tmp_path):
+def test_cli_writes_all_svgs_without_reference(tmp_path):
     _artifacts(tmp_path)
     trace = json.loads((tmp_path / 'pipeline_trace.json').read_text(encoding='utf-8'))
     trace.pop('reference')
     (tmp_path / 'pipeline_trace.json').write_text(json.dumps(trace), encoding='utf-8')
     main([str(tmp_path), '--format', 'svg'])
-    assert (tmp_path / 'speaker_timeline.svg').stat().st_size > 100
+    for name in ('similarity_heatmap', 'speaker_timeline', 'similarity_distributions', 'ahc_dendrogram'):
+        assert (tmp_path / f'{name}.svg').stat().st_size > 100
 
 
 def test_dendrogram_rejects_incomplete_real_hierarchy(tmp_path):

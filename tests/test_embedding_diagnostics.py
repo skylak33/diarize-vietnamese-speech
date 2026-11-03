@@ -4,7 +4,8 @@ import numpy as np
 
 from diarize import pipeline
 from diarize.embedding_diagnostics import (classify_reference_windows, cluster_similarity_stats,
-                                           cosine_similarity_matrix, reference_similarity_stats)
+                                           cosine_similarity_matrix, reference_similarity_stats,
+                                           validate_embeddings, write_artifacts)
 
 
 def _mock_pipeline(monkeypatch):
@@ -55,3 +56,58 @@ def test_similarity_statistics_and_reference_overlap():
     reference = reference_similarity_stats(embeddings, windows)
     assert reference["same_speaker_similarity"]["count"] == 0
     assert reference["different_speaker_similarity"]["count"] == 1
+
+
+def test_embedding_validation_and_reference_classes_cover_edge_cases():
+    empty, starts, ends = validate_embeddings(np.empty((0, 2)), [], [])
+    assert empty.shape == (0, 2) and starts.size == ends.size == 0
+    for bad in (np.array([[np.nan, 0.]]), np.array([[0., 0.]])):
+        try:
+            validate_embeddings(bad)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("invalid embeddings were accepted")
+
+    classifications = classify_reference_windows(
+        [0., 1., 2., 3.], [1., 2., 3., 4.],
+        [(1., 1.2, "A"), (2., 3., "A"), (2.5, 3., "B")])
+    assert [item["classification"] for item in classifications] == [
+        "unannotated_window", "uncertain_window", "overlapping_speech_window",
+        "unannotated_window"]
+    partial_overlap = classify_reference_windows(
+        [0.], [1.], [(0., .7, "A"), (.5, .8, "B")])
+    assert partial_overlap[0]["classification"] == "overlapping_speech_window"
+
+
+def test_reference_source_is_metadata_and_cannot_change_diagnostic_rttm(tmp_path, monkeypatch):
+    _mock_pipeline(monkeypatch)
+    audio, model = tmp_path / "sample.wav", tmp_path / "model.pt"
+    audio.write_bytes(b"audio")
+    model.write_bytes(b"model")
+    monkeypatch.setattr(pipeline, "cluster_embeddings", lambda *a, **k: np.array([1, 0]))
+    outputs = {}
+    for source in ("manual_reference", "published_reference"):
+        directory = tmp_path / source
+        outputs[source] = pipeline.diarize(
+            str(audio), str(model), encoder=object(), diagnostic_output_dir=str(directory),
+            reference_source=source)
+        config = json.loads((directory / "sample" / "config.json").read_text())
+        assert config["reference_source"] == source
+    assert outputs["manual_reference"] == outputs["published_reference"]
+
+
+def test_compactness_is_scale_invariant_and_artifacts_reject_non_normalized_rows(tmp_path):
+    embeddings = np.array([[1., 0.], [.8, .2], [0., 1.]])
+    labels = np.array([0, 0, 1])
+    scaled = embeddings * np.array([[7.], [.2], [13.]])
+    assert cluster_similarity_stats(embeddings, labels)["compactness"] == (
+        cluster_similarity_stats(scaled, labels)["compactness"])
+
+    try:
+        write_artifacts(tmp_path / "bad", scaled, [(0., 1.), (1., 2.), (2., 3.)], {}, {})
+    except ValueError as error:
+        assert "L2-normalized" in str(error)
+    else:
+        raise AssertionError("non-normalized diagnostic embeddings were serialized")
+    assert not (tmp_path / "bad").exists()

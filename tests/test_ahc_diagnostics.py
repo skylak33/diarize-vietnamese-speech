@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from diarize.cluster import cluster_ahc, cluster_embeddings
 
@@ -45,3 +46,29 @@ def test_cluster_embeddings_exposes_actual_ahc_trace():
     assert diagnostics['ahc']['labels'] == labels.tolist()
     assert diagnostics['ahc']['metric'] == 'cosine'
     assert diagnostics['ahc']['linkage'] == 'average'
+
+
+def test_ahc_degenerate_embeddings_and_max_speaker_cap_keep_a_valid_partition():
+    identical = np.ones((4, 2))
+    baseline = cluster_ahc(identical, threshold=0)
+    labels, trace = cluster_ahc(identical, threshold=0, return_diagnostics=True)
+    assert _same_partition(labels, baseline)
+    assert trace['distances'] == pytest.approx([0, 0, 0])
+
+    embeddings = np.eye(4)
+    diagnostics = {}
+    capped = cluster_embeddings(embeddings, method='ahc', threshold=.01,
+                                 max_speakers=2, diagnostics=diagnostics)
+    expected = cluster_embeddings(embeddings, method='ahc', n_speakers=2)
+    assert len(set(capped)) == 2
+    assert _same_partition(capped, expected)
+    assert diagnostics['ahc_threshold']['requested_n_speakers'] is None
+    assert diagnostics['ahc']['requested_n_speakers'] == 2
+
+
+def test_single_window_ahc_diagnostics_have_an_empty_hierarchy():
+    diagnostics = {}
+    labels = cluster_embeddings(np.array([[1., 0.]]), method='ahc', diagnostics=diagnostics)
+    assert labels.tolist() == [0]
+    assert diagnostics['ahc']['children'] == diagnostics['ahc']['distances'] == []
+    assert diagnostics['ahc']['merges'] == []

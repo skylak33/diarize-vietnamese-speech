@@ -14,6 +14,19 @@ def test_builtin_defaults_preserve_cli_behavior():
     assert config == DEFAULT_CONFIG
 
 
+def test_cli_propagates_diagnostic_options_without_touching_pipeline_config():
+    args, config = parse_cli_args([
+        'audio.wav', '--model', 'model.model', '--diagnostic_output_dir', 'diagnostics',
+        '--diagnostic_counterfactuals', '--evaluation_protocol', 'uem-v1',
+        '--reference_source', 'manual_reference',
+    ])
+    assert args.diagnostic_output_dir == 'diagnostics'
+    assert args.diagnostic_counterfactuals is True
+    assert args.evaluation_protocol == 'uem-v1'
+    assert args.reference_source == 'manual_reference'
+    assert config == DEFAULT_CONFIG
+
+
 def test_yaml_is_loaded_and_only_explicit_cli_values_override(tmp_path):
     path = tmp_path / 'config.yaml'
     path.write_text('''
