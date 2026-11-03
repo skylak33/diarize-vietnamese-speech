@@ -110,28 +110,51 @@ def cluster_ahc(
     embeddings: numpy.ndarray,
     n_speakers: int   = None,
     threshold: float  = 0.7,
-) -> numpy.ndarray:
+    return_diagnostics: bool = False,
+) -> numpy.ndarray | tuple[numpy.ndarray, dict]:
     """
     Агломеративная иерархическая кластеризация (AHC).
     """
     emb = normalize(embeddings, norm="l2")
 
+    options = dict(metric="cosine", linkage="average")
+    if return_diagnostics:
+        options.update(compute_distances=True, compute_full_tree=True)
     if n_speakers is not None:
-        model = AgglomerativeClustering(
-            n_clusters     = n_speakers,
-            metric         = "cosine",
-            linkage        = "average",
-        )
+        model = AgglomerativeClustering(n_clusters=n_speakers, **options)
     else:
         model = AgglomerativeClustering(
-            n_clusters        = None,
-            distance_threshold = threshold,
-            metric            = "cosine",
-            linkage           = "average",
-        )
+            n_clusters=None, distance_threshold=threshold, **options)
 
     labels = model.fit_predict(emb)
-    return labels
+    if not return_diagnostics:
+        return labels
+
+    sizes = {index: 1 for index in range(len(emb))}
+    merges = []
+    for step, ((left, right), distance) in enumerate(zip(model.children_, model.distances_)):
+        left, right = int(left), int(right)
+        merged_size = sizes[left] + sizes[right]
+        sizes[len(emb) + step] = merged_size
+        merges.append(dict(
+            merge_step=step,
+            left_cluster_id=left,
+            right_cluster_id=right,
+            merge_distance=float(distance),
+            merged_cluster_size=merged_size,
+        ))
+    diagnostics = dict(
+        metric="cosine",
+        linkage="average",
+        threshold=None if n_speakers is not None else float(threshold),
+        requested_n_speakers=n_speakers,
+        children=model.children_.astype(int).tolist(),
+        distances=model.distances_.astype(float).tolist(),
+        merges=merges,
+        labels=labels.astype(int).tolist(),
+        cluster_sizes=numpy.unique(labels, return_counts=True)[1].astype(int).tolist(),
+    )
+    return labels, diagnostics
 
 
 def cluster_spectral(
@@ -251,6 +274,7 @@ def cluster_embeddings(
     threshold: float  = 0.7,
     max_speakers: int = 10,
     seed: int = 42,
+    diagnostics: dict | None = None,
 ) -> numpy.ndarray:
     """
     Кластеризация эмбеддингов говорящих.
@@ -276,9 +300,21 @@ def cluster_embeddings(
             return gate
 
     if method == "ahc":
-        labels = cluster_ahc(embeddings, n_speakers=n_speakers, threshold=threshold)
+        result = cluster_ahc(embeddings, n_speakers=n_speakers, threshold=threshold,
+                             return_diagnostics=diagnostics is not None)
+        if diagnostics is None:
+            labels = result
+        else:
+            labels, diagnostics['ahc'] = result
         if n_speakers is None and len(set(labels)) > max_speakers:
-            labels = cluster_ahc(embeddings, n_speakers=max_speakers)
+            if diagnostics is not None:
+                diagnostics['ahc_threshold'] = diagnostics['ahc']
+            result = cluster_ahc(embeddings, n_speakers=max_speakers,
+                                 return_diagnostics=diagnostics is not None)
+            if diagnostics is None:
+                labels = result
+            else:
+                labels, diagnostics['ahc'] = result
     elif method == "spectral":
         labels = cluster_spectral(embeddings, n_speakers=n_speakers, max_speakers=max_speakers, seed=seed)
     elif method == "nme_sc":
