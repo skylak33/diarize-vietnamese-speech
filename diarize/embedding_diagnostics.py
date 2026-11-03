@@ -51,8 +51,9 @@ def cluster_similarity_stats(embeddings, labels, max_windows=None):
     same = labels[:, None] == labels[None, :]
     unique, counts = np.unique(labels, return_counts=True)
     centroids, compactness, nearest = [], {}, {}
+    normalized = embeddings / np.linalg.norm(embeddings, axis=1, keepdims=True)
     for label in unique:
-        members = embeddings[labels == label]
+        members = normalized[labels == label]
         centroid = members.mean(axis=0)
         centroid_norm = np.linalg.norm(centroid)
         if not centroid_norm:
@@ -76,8 +77,12 @@ def cluster_similarity_stats(embeddings, labels, max_windows=None):
 def classify_reference_windows(window_starts, window_ends, reference_segments, min_coverage=.8):
     """Classify windows by reference temporal overlap, never by their midpoint."""
     _, starts, ends = validate_embeddings(np.ones((len(window_starts), 1)), window_starts, window_ends)
+    reference_segments = list(reference_segments)
     if not 0 < min_coverage <= 1:
         raise ValueError("min_coverage must be in (0, 1]")
+    if any(not np.isfinite(start + end) or start < 0 or end <= start
+           for start, end, _ in reference_segments):
+        raise ValueError("reference segments must be finite positive intervals")
     result = []
     for start, end in zip(starts, ends):
         overlaps = {}
@@ -124,6 +129,8 @@ def reference_similarity_stats(embeddings, classifications, max_windows=None):
 def write_artifacts(output_dir, embeddings, segments, trace, config):
     """Write the stable diagnostic artifact schema without rerunning inference."""
     embeddings, starts, ends = validate_embeddings(embeddings, [s for s, _ in segments], [e for _, e in segments])
+    if len(embeddings) and not np.allclose(np.linalg.norm(embeddings, axis=1), 1., atol=1e-5):
+        raise ValueError("serialized embeddings must be L2-normalized")
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     np.savez(output_dir / "embeddings.npz", embeddings=embeddings, window_starts=starts, window_ends=ends)

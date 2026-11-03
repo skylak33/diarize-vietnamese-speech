@@ -290,9 +290,25 @@ def cluster_embeddings(
     if embeddings.ndim != 2 or not numpy.isfinite(embeddings).all() or (numpy.linalg.norm(embeddings, axis=1) == 0).any():
         raise ValueError("Embeddings must be finite nonzero vectors")
     if len(embeddings) == 1 or n_speakers == 1 or (n_speakers is None and max_speakers == 1):
-        return numpy.zeros(len(embeddings), dtype=int)
+        labels = numpy.zeros(len(embeddings), dtype=int)
+        if diagnostics is not None and method == "ahc":
+            if len(embeddings) == 1:
+                diagnostics['ahc'] = dict(
+                    metric="cosine", linkage="average",
+                    threshold=None if n_speakers == 1 or max_speakers == 1 else float(threshold),
+                    requested_n_speakers=n_speakers, children=[], distances=[], merges=[],
+                    labels=[0], cluster_sizes=[1])
+            else:
+                _, diagnostics['ahc'] = cluster_ahc(
+                    embeddings, n_speakers=1, return_diagnostics=True)
+        return labels
     if n_speakers == len(embeddings):
-        return numpy.arange(len(embeddings))
+        labels = numpy.arange(len(embeddings))
+        if diagnostics is not None and method == "ahc":
+            _, diagnostics['ahc'] = cluster_ahc(
+                embeddings, n_speakers=n_speakers, return_diagnostics=True)
+            diagnostics['ahc']['labels'] = labels.tolist()
+        return labels
     if method in {"spectral", "nme_sc"} and n_speakers is None:
         # The spectral estimators need a one-speaker/small-sample fallback.
         gate = cluster_ahc(embeddings, threshold=threshold)
