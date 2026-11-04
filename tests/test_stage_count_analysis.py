@@ -86,6 +86,14 @@ def test_build_report_attributes_count_errors_and_oracle_identity_loss(tmp_path)
     assert report["summary"]["postprocessing_count_effect"] == {
         "improved": 1, "worsened": 1, "unchanged": 0,
     }
+    assert report["summary"]["count_error_transition"] == {
+        "initial_errors": 1, "final_errors": 1, "corrected": 1,
+        "introduced": 1, "remained": 0,
+    }
+    assert report["summary"]["stage_count_changes"]["temporal_smoothing"] == {
+        "comparable": 2, "decreased": 1, "increased": 0, "unchanged": 1,
+        "labels_removed": 1, "labels_added": 0,
+    }
     assert report["summary"]["correct_final_count_with_speaker_error"] == {
         "count": 1, "recordings": ["a"],
     }

@@ -256,6 +256,19 @@ def _oracle_identity_elimination(automatic, oracle, reference_counts):
     }
 
 
+def _stage_change(rows, before, after):
+    comparable = [row for row in rows
+                  if row[before] is not None and row[after] is not None]
+    return {
+        "comparable": len(comparable),
+        "decreased": sum(row[after] < row[before] for row in comparable),
+        "increased": sum(row[after] > row[before] for row in comparable),
+        "unchanged": sum(row[after] == row[before] for row in comparable),
+        "labels_removed": sum(max(0, row[before] - row[after]) for row in comparable),
+        "labels_added": sum(max(0, row[after] - row[before]) for row in comparable),
+    }
+
+
 def build_report(artifacts, reference_rttm, evaluation, expected_recordings=100,
                  oracle_artifacts=None):
     """Load existing artifacts and return per-recording counts plus aggregate diagnostics."""
@@ -300,12 +313,32 @@ def build_report(artifacts, reference_rttm, evaluation, expected_recordings=100,
     if oracle_artifacts is not None:
         oracle_summary = _oracle_identity_elimination(
             automatic, _load_artifacts(oracle_artifacts, oracle=True), reference_counts)
+    initial_errors = {row["recording"] for row in rows
+                      if row["initial_K"] != row["reference_K"]}
+    final_errors = {row["recording"] for row in rows
+                    if row["final_K"] != row["reference_K"]}
     return {
         "recordings": rows,
         "summary": {
             "recordings": len(rows),
             "count_error_origins": origins,
             "postprocessing_count_effect": effects,
+            "count_error_transition": {
+                "initial_errors": len(initial_errors),
+                "final_errors": len(final_errors),
+                "corrected": len(initial_errors - final_errors),
+                "introduced": len(final_errors - initial_errors),
+                "remained": len(initial_errors & final_errors),
+            },
+            "stage_count_changes": {
+                "centroid_merge": _stage_change(
+                    rows, "initial_K", "after_centroid_K"),
+                "temporal_smoothing": _stage_change(
+                    rows, "after_centroid_K", "after_smoothing_K"),
+                "final_postprocessing": _stage_change(
+                    rows, "after_smoothing_K", "final_K"),
+                "initial_to_final": _stage_change(rows, "initial_K", "final_K"),
+            },
             "correct_final_count_with_speaker_error": {
                 "count": len(residual), "recordings": residual},
             "oracle_count_identity_elimination": oracle_summary,
