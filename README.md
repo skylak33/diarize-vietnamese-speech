@@ -17,6 +17,8 @@ AHC/spectral clustering → RTTM. Архитектура ECAPA-TDNN сохран
 - `docs/DIARIZATION.md`: overclustering, режимы inference и воспроизводимые ablations.
 - `docs/SPEAKER_CLUSTERING_IMPROVEMENTS.md`: adaptive AHC, fair count comparison,
   oracle-count и smoothing diagnostics.
+- `docs/CLUSTERING_IMPROVEMENTS_V2.md`: robust adaptive AHC, exploratory ViYT
+  comparison, regressions и stage-count analysis.
 - `docs/DIARIZATION_DEVELOPMENT_DATA.md`: независимые данные и план получения
   VoxConverse без leakage.
 - `docs/EMBEDDING_ERROR_ANALYSIS.md`: optional embedding/AHC/postprocessing diagnostics and PowerShell workflow.
@@ -298,8 +300,9 @@ python experiments/run_diarization_experiments.py \
 Выбор `--experiment`:
 
 - `clustering`: AHC/spectral/NME-SC.
-- `clustering_count`: fixed AHC/adaptive AHC/spectral/NME-SC с одинаковыми
-  segmentation settings и только automatic count.
+- `clustering_count`: fixed AHC/legacy adaptive AHC/robust adaptive
+  AHC/spectral/NME-SC с одинаковыми segmentation settings и только automatic
+  count.
 - `ahc_threshold`: 0.65, 0.70, 0.75, 0.80; AHC automatic count.
 - `centroid_merge`: AHC only и post-merge с cosine similarity 0.75, 0.80, 0.85.
 - `vad_threshold`: 0.3, 0.4, 0.5, 0.6, 0.7.
@@ -329,10 +332,14 @@ Accuracy — доля точных совпадений (0–1), MAE — сре�
 
 Полное описание различий AHC distance и centroid cosine similarity, YAML precedence,
 диагностик и команд ViYT-Diar находится в [`docs/DIARIZATION.md`](docs/DIARIZATION.md).
-Adaptive AHC является opt-in (`--count_estimator adaptive_ahc`); defaults не изменены.
+Adaptive AHC является opt-in (`--count_estimator adaptive_ahc` или отдельный
+robust-вариант `adaptive_ahc_robust`); defaults не изменены.
 Математика stopping rule, точные PowerShell-команды, paired oracle diagnostic и
 результат smoothing для `XJG-o9BK4To` находятся в
 [`docs/SPEAKER_CLUSTERING_IMPROVEMENTS.md`](docs/SPEAKER_CLUSTERING_IMPROVEMENTS.md).
+Измерения robust-варианта на повторно использованном ViYT test set находятся в
+[`docs/CLUSTERING_IMPROVEMENTS_V2.md`](docs/CLUSTERING_IMPROVEMENTS_V2.md) и не
+являются основанием для production promotion.
 Temporal SpeakerError intervals and PNG/SVG review workflows are documented in
 [`docs/DIARIZATION_ERROR_ANALYSIS.md`](docs/DIARIZATION_ERROR_ANALYSIS.md).
 

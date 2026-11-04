@@ -56,17 +56,22 @@ d[1] <= d[2] <= ... <= d[N-1].
 
 For each adjacent gap `g[i] = d[i+1] - d[i]`, stopping before merge `i+1`
 implies `k = N - i` clusters. Only `2 <= k <= max_speakers` is eligible. The
-estimator computes Tukey's upper fence over eligible gaps,
-`Q3 + 1.5 * (Q3 - Q1)`, and selects the largest gap only when it exceeds that
-fence. A jump after numerically flat, near-zero merges is also accepted. If no
-gap is decisive, the existing fixed-distance threshold supplies a conservative
-fallback. The chosen count is then passed to a second AHC fit.
+legacy estimator computes Tukey's upper fence over eligible gaps,
+`Q3 + 1.5 * (Q3 - Q1)`, with the candidate included in that reference sample.
+It selects the largest gap only when it exceeds the fence; a jump after
+numerically flat, near-zero merges is also accepted. This behavior is preserved
+under `adaptive_ahc`. The separate `adaptive_ahc_robust` opt-in excludes the
+largest candidate from the Tukey reference sample and rejects tied evidence.
+If no gap is decisive, both modes use the existing fixed-distance threshold as
+a conservative fallback.
 
 The gap scan is `O(N)` time and memory. The hierarchy dominates: the current
 scikit-learn implementation requires quadratic pairwise work/storage in the
-number of windows in the typical case. Adaptive mode constructs the hierarchy
-and then refits AHC at the selected count, so it can approach twice the fixed-AHC
-clustering cost. This cost is reported separately from embedding extraction.
+number of windows in the typical case. Adaptive mode fits one complete
+hierarchy, then deterministically cuts that same tree at the selected count; it
+does not refit AHC. Diagnostics include the selection reason, eligible-gap
+count, best and runner-up gaps, their margin, the Tukey cutoff, and the fallback
+count. Clustering time is reported separately from embedding extraction.
 
 Enable it explicitly:
 
@@ -85,17 +90,21 @@ clustering:
   count_estimator: adaptive_ahc
 ```
 
+Use `adaptive_ahc_robust` in either location to run the leave-one-out Tukey
+variant. It remains experimental and does not replace the legacy adaptive mode.
+
 It is rejected with spectral/NME-SC or with `--n_speakers`, because those cases
 have their own estimator or an explicit count.
 
 ## Fair automatic comparison
 
-`clustering_count` compares fixed-threshold AHC, adaptive AHC, spectral
-silhouette selection and NME-SC under identical VAD/window/model/seed settings.
-All four configurations are automatic; reference speaker counts are never
-passed to them. The runner loads the encoder once and reuses only compatible
-embeddings. Backend-specific clustering time and count diagnostics remain
-separate. Use a new output directory for every run.
+`clustering_count` compares fixed-threshold AHC, legacy adaptive AHC, robust
+adaptive AHC, spectral silhouette selection and NME-SC under identical
+VAD/window/model/seed settings. All five configurations are automatic;
+reference speaker counts are never passed to them. The runner loads the encoder
+once and reuses only compatible embeddings. Backend-specific clustering time
+and count diagnostics remain separate. Use a new output directory for every
+run.
 
 Inspect the exact plan without model/data access:
 
@@ -120,6 +129,11 @@ python -m experiments.run_diarization_experiments `
 
 Until that run exists, backend/adaptive comparison tables must say
 "not measured on independent data" rather than reuse ViYT numbers.
+
+The complete reused-test v2 comparison, per-recording regressions, stage-count
+analysis and reproduction commands are in
+[`CLUSTERING_IMPROVEMENTS_V2.md`](CLUSTERING_IMPROVEMENTS_V2.md). Those numbers
+are exploratory and do not change the production recommendation.
 
 ## Oracle speaker-count diagnostic
 
@@ -218,7 +232,6 @@ python -m compileall -q models train diarize eval experiments utils tests
 - AHC windows do not model overlapping speakers; one label is emitted per time.
 - Speaker count can be correct while cluster assignments are wrong, and temporal
   postprocessing can change the final count.
-- Adaptive stopping is heuristic, sensitive to embedding/window quality, and
-  adds an extra AHC fit.
+- Adaptive stopping is heuristic and sensitive to embedding/window quality.
 - VoxConverse/AMI are English and domain-mismatched; Vietnamese validation is
   still required before changing defaults.

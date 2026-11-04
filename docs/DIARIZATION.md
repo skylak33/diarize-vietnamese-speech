@@ -30,11 +30,15 @@ python -m diarize.pipeline "data\audio\sample.wav" `
   --output "results\adaptive\sample.rttm"
 ```
 
-It finds an outlying gap in the complete AHC merge-distance hierarchy and falls
-back to the configured fixed threshold when the hierarchy has no decisive gap.
-The repository default remains fixed-threshold AHC. See
+`adaptive_ahc` preserves the original gap rule. The separate
+`adaptive_ahc_robust` option uses a leave-one-out Tukey reference sample and
+rejects tied evidence. Both cut the already fitted AHC tree deterministically,
+report gap uncertainty fields, and fall back to the configured fixed threshold
+when the hierarchy has no decisive gap. The repository default remains
+fixed-threshold AHC. See
 [`SPEAKER_CLUSTERING_IMPROVEMENTS.md`](SPEAKER_CLUSTERING_IMPROVEMENTS.md) for
-the stopping rule, complexity, fair comparison protocol and limitations.
+the stopping rule and [`CLUSTERING_IMPROVEMENTS_V2.md`](CLUSTERING_IMPROVEMENTS_V2.md)
+for the reused-test v2 measurements and limitations.
 
 ## Inference
 
@@ -157,8 +161,9 @@ Supported series:
 - `window`: window/step 1.5/0.75, 2.0/1.0, 3.0/1.5 seconds;
 - `vad_silence`: 100, 200, 300 ms;
 - `speaker_count`: oracle known count and automatic count;
-- `clustering_count`: fixed AHC, adaptive AHC, spectral and NME-SC under the
-  same segmentation settings, all with automatic count;
+- `clustering_count`: fixed AHC, legacy adaptive AHC, robust adaptive AHC,
+  spectral and NME-SC under the same segmentation settings, all with automatic
+  count;
 - `clustering`: AHC, spectral with silhouette count selection, and NME-SC;
 - `vad_threshold` and `all` remain available.
 
