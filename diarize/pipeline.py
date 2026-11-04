@@ -7,6 +7,7 @@ import os
 import sys
 import argparse
 import json
+import time
 from pathlib import Path
 
 import numpy
@@ -156,6 +157,7 @@ def diarize(
     diagnostic_counterfactuals: bool = False,
     evaluation_protocol: str | None = None,
     reference_source: str | None = None,
+    count_estimator: str | None = None,
 ) -> str:
     set_seed(seed)
     if diagnostics is not None:
@@ -246,10 +248,13 @@ def diarize(
     embedding_segments = list(sub_segs)
 
     print(f"\n[diarize] === Шаг 4: Кластеризация ===")
-    cluster_trace = {} if diagnostic_output_dir is not None else None
+    cluster_trace = {} if diagnostics is not None or diagnostic_output_dir is not None else None
+    clustering_started = time.perf_counter()
     initial_labels = cluster_embeddings(embeddings, method=method, n_speakers=n_speakers,
                                         threshold=threshold, max_speakers=max_speakers, seed=seed,
-                                        diagnostics=cluster_trace)
+                                        diagnostics=cluster_trace,
+                                        count_estimator=count_estimator)
+    clustering_runtime = time.perf_counter() - clustering_started
     labels = initial_labels.copy()
     n_clusters = len(set(labels))
     if n_speakers is not None and n_clusters != n_speakers:
@@ -261,7 +266,9 @@ def diarize(
                            n_clusters_before_postmerge=n_clusters,
                            n_clusters_after_postmerge=n_clusters,
                            cluster_sizes_before_postmerge=sizes,
-                           cluster_sizes_after_postmerge=sizes)
+                           cluster_sizes_after_postmerge=sizes,
+                           clustering_runtime_seconds=clustering_runtime,
+                           clustering=cluster_trace or {})
 
     if centroid_merge and n_speakers is None:
         labels, merge_diagnostics = merge_similar_clusters(
@@ -305,7 +312,8 @@ def diarize(
                             "partitioned_segments": stage(partitioned_segments, partitioned_labels),
                             "segments_after_short_merge": stage(segments_after_short_merge, labels_after_short_merge),
                             "final_rttm_segments": stage(sub_segs, labels)}}
-        inference_configuration = {"n_speakers": n_speakers, "method": method, "threshold": threshold,
+        inference_configuration = {"n_speakers": n_speakers, "method": method,
+            "count_estimator": count_estimator or "backend_default", "threshold": threshold,
             "vad_threshold": vad_threshold, "vad_min_speech_ms": vad_min_speech_ms,
             "vad_min_silence_ms": vad_min_silence_ms, "vad_speech_pad_ms": vad_speech_pad_ms,
             "window_sec": window_sec, "step_sec": step_sec, "min_segment_sec": min_segment_sec,
@@ -370,6 +378,8 @@ def parse_cli_args(argv=None):
     parser.add_argument("--n_speakers",      type=int)
     parser.add_argument("--method",          type=str, default=argparse.SUPPRESS,
                         choices=["ahc", "spectral", "nme_sc"])
+    parser.add_argument("--count_estimator", default=argparse.SUPPRESS,
+                        choices=["backend_default", "adaptive_ahc"])
     parser.add_argument("--threshold", type=float, default=argparse.SUPPRESS)
     parser.add_argument("--vad_threshold", type=float, default=argparse.SUPPRESS)
     parser.add_argument("--vad_min_speech_ms", type=int, default=argparse.SUPPRESS)
@@ -397,7 +407,8 @@ def parse_cli_args(argv=None):
     args = parser.parse_args(argv)
     config = load_config(args.config)
     paths = {
-        'method': 'clustering.method', 'threshold': 'clustering.threshold',
+        'method': 'clustering.method', 'count_estimator': 'clustering.count_estimator',
+        'threshold': 'clustering.threshold',
         'max_speakers': 'clustering.max_speakers', 'window_sec': 'embedding.window_sec',
         'step_sec': 'embedding.step_sec', 'min_segment_sec': 'embedding.min_segment_sec',
         'vad_threshold': 'vad.threshold', 'vad_min_speech_ms': 'vad.min_speech_ms',
@@ -431,6 +442,7 @@ if __name__ == "__main__":
         model_path=args.model,
         n_speakers=args.n_speakers,
         method=args.method,
+        count_estimator=args.count_estimator,
         threshold=args.threshold,
         vad_threshold=args.vad_threshold,
         vad_min_silence_ms=args.vad_min_silence_ms,

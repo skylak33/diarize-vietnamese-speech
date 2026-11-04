@@ -4,8 +4,41 @@ import json
 import sys
 import numpy as np
 import soundfile as sf
+from argparse import Namespace
 from experiments import run_diarization_experiments as runner
 from experiments import eval_checkpoints, plot_training
+
+
+def test_clustering_count_comparison_is_opt_in_and_reuses_one_cache():
+    args = Namespace(method='ahc', threshold=.65, vad_threshold=.5, window_sec=1.5,
+                     step_sec=None, speaker_mode='automatic', experiment='clustering_count')
+    configs = runner.configurations(args)
+    assert [(config['method'], config['count_estimator']) for config in configs] == [
+        ('ahc', None), ('ahc', 'adaptive_ahc'), ('spectral', None), ('nme_sc', None)]
+    assert {config['speaker_mode'] for config in configs} == {'automatic'}
+
+
+def test_oracle_count_diagnostics_are_paired_and_explicitly_diagnostic():
+    row = dict(N_ref=2, N_pred=1, DER=20., speaker_error=15.,
+               speaker_error_seconds=6., abs_error=1)
+    oracle = dict(N_ref=2, N_pred=2, DER=8., speaker_error=3.,
+                  speaker_error_seconds=1., abs_error=0)
+    totals = dict(DER=20., speaker_error=15., speaker_count_mae=1.,
+                  speaker_error_seconds=6., speaker_count_accuracy=0.,
+                  average_predicted_speakers=1.)
+    oracle_totals = dict(DER=8., speaker_error=3., speaker_count_mae=0.,
+                         speaker_error_seconds=1., speaker_count_accuracy=1.,
+                         average_predicted_speakers=2.)
+    artifact = runner.oracle_count_diagnostics({
+        'automatic': {'a':row, '__total__':totals},
+        'known': {'a':oracle, '__total__':oracle_totals},
+    })
+    assert 'not an automatic diarization result' in artifact['condition']
+    assert artifact['aggregate']['DER_delta'] == 12.
+    assert artifact['aggregate']['recordings_improved'] == 1
+    assert artifact['recordings'][0]['oracle_count_output_speakers'] == 2
+    assert artifact['recordings'][0]['speaker_error_delta'] == 12.
+    assert artifact['recordings'][0]['speaker_count_delta'] == -1
 
 
 def test_runner_outputs_and_oracle_count(tmp_path, monkeypatch):
@@ -47,6 +80,9 @@ def test_runner_outputs_and_oracle_count(tmp_path, monkeypatch):
     assert (out/'experiment_manifest.json').is_file()
     summary=json.loads((out/'config_001'/'centroid_merge_summary.json').read_text())
     assert summary['merge_attempts']==0 and summary['best_similarity']['count']==0
+    oracle_artifact=json.loads((out/'oracle_count_diagnostics.json').read_text())
+    assert oracle_artifact['delta_definition']=='automatic minus oracle-count'
+    assert oracle_artifact['recordings'][0]['recording_id']=='a'
 
 
 def test_centroid_summary_includes_all_targets_and_reasons():

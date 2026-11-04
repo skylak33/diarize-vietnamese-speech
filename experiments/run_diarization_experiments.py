@@ -15,6 +15,7 @@ AHC_STABILITY_THRESHOLDS = [0.70, 0.72, 0.74, 0.75, 0.77]
 
 def configurations(args):
     base = dict(method=args.method, ahc_threshold=args.threshold,
+                count_estimator=getattr(args, 'count_estimator', None),
                 vad_threshold=args.vad_threshold, window_sec=args.window_sec,
                 step_sec=args.step_sec or args.window_sec / 2, speaker_mode=args.speaker_mode,
                 min_segment_sec=getattr(args, 'min_segment_sec', 0.5),
@@ -26,6 +27,16 @@ def configurations(args):
                 vad_min_silence_ms=getattr(args, 'vad_min_silence_ms', 100))
     if args.experiment == 'baseline':
         return [base]
+    if args.experiment == 'clustering_count':
+        return [
+            {**base, 'method':'ahc', 'count_estimator':None, 'speaker_mode':'automatic'},
+            {**base, 'method':'ahc', 'count_estimator':'adaptive_ahc',
+             'speaker_mode':'automatic'},
+            {**base, 'method':'spectral', 'count_estimator':None,
+             'speaker_mode':'automatic'},
+            {**base, 'method':'nme_sc', 'count_estimator':None,
+             'speaker_mode':'automatic'},
+        ]
     variations = {
         'clustering': ('method', ['ahc', 'spectral', 'nme_sc']),
         'ahc_threshold': ('ahc_threshold', AHC_THRESHOLDS),
@@ -44,7 +55,11 @@ def configurations(args):
         for value in values:
             config = {**base, key:value}
             if experiment in {'ahc_threshold', 'ahc_stability'}:
-                config.update(method='ahc', speaker_mode='automatic')
+                config.update(method='ahc', speaker_mode='automatic', count_estimator=None)
+            elif experiment == 'clustering' or config['method'] != 'ahc':
+                config['count_estimator'] = None
+            if experiment == 'speaker_count' and value == 'known':
+                config['count_estimator'] = None
             if experiment == 'centroid_merge':
                 config.update(method='ahc', speaker_mode='automatic', centroid_merge=value is not None)
                 if value is None:
@@ -62,9 +77,18 @@ def diagnostic_row(file_id, model, config, trace, metric):
     """Combine inference trace and reference metrics without inventing values."""
     before = trace.get('cluster_sizes_before_postmerge', trace.get('cluster_sizes', []))
     after = trace.get('cluster_sizes_after_postmerge', before)
+    ahc = trace.get('clustering', {}).get('ahc', {})
+    estimator = ahc.get('estimator')
+    if estimator is None:
+        estimator = {'spectral':'spectral_silhouette', 'nme_sc':'nme_eigengap'}.get(
+            config['method'], 'fixed_threshold')
     return dict(
         recording_id=file_id, model_checkpoint=str(model), method=config['method'],
+        count_estimator=estimator,
+        estimated_speaker_count=trace.get('n_clusters_before_postprocess', 0),
         ahc_threshold=config['ahc_threshold'] if config['method'] == 'ahc' else None,
+        ahc_merge_distances=ahc.get('distances', []), ahc_count_gaps=ahc.get('gaps', []),
+        clustering_runtime_seconds=trace.get('clustering_runtime_seconds', 0.),
         window_sec=config['window_sec'], step_sec=config['step_sec'],
         vad_min_silence_ms=config.get('vad_min_silence_ms', 100),
         n_embedding_windows=trace.get('n_embedding_windows', 0),
@@ -123,13 +147,77 @@ def save_diagnostics(rows, folder):
                              for key, value in row.items()})
 
 
+def oracle_count_diagnostics(results):
+    """Build paired automatic-minus-oracle deltas from completed evaluations."""
+    def delta(left, right):
+        return None if left is None or right is None else left - right
+
+    automatic, oracle = results['automatic'], results['known']
+    files = sorted(automatic.keys() - {'__total__'})
+    rows = []
+    for file_id in files:
+        auto, known = automatic[file_id], oracle[file_id]
+        rows.append(dict(
+            recording_id=file_id,
+            reference_speakers=auto['N_ref'],
+            automatic_speakers=auto['N_pred'],
+            oracle_requested_speakers=known['N_ref'],
+            oracle_count_output_speakers=known['N_pred'],
+            speaker_count_delta=auto['N_pred'] - known['N_pred'],
+            automatic_DER=auto['DER'], oracle_count_DER=known['DER'],
+            DER_delta=delta(auto['DER'], known['DER']),
+            automatic_speaker_error=auto['speaker_error'],
+            oracle_count_speaker_error=known['speaker_error'],
+            speaker_error_delta=delta(auto['speaker_error'], known['speaker_error']),
+            automatic_speaker_error_seconds=auto['speaker_error_seconds'],
+            oracle_count_speaker_error_seconds=known['speaker_error_seconds'],
+            speaker_error_seconds_delta=delta(auto['speaker_error_seconds'],
+                                              known['speaker_error_seconds']),
+            automatic_count_absolute_error=auto['abs_error'],
+            oracle_count_absolute_error=known['abs_error'],
+            count_absolute_error_delta=auto['abs_error'] - known['abs_error'],
+        ))
+    auto_total, known_total = automatic['__total__'], oracle['__total__']
+    der_deltas = [row['DER_delta'] for row in rows]
+    return dict(
+        condition='oracle speaker count diagnostic; not an automatic diarization result',
+        delta_definition='automatic minus oracle-count',
+        aggregate=dict(
+            automatic_DER=auto_total['DER'], oracle_count_DER=known_total['DER'],
+            DER_delta=delta(auto_total['DER'], known_total['DER']),
+            automatic_speaker_error=auto_total['speaker_error'],
+            oracle_count_speaker_error=known_total['speaker_error'],
+            speaker_error_delta=delta(auto_total['speaker_error'], known_total['speaker_error']),
+            automatic_average_speakers=auto_total['average_predicted_speakers'],
+            oracle_count_average_speakers=known_total['average_predicted_speakers'],
+            average_speaker_count_delta=(auto_total['average_predicted_speakers']
+                                         - known_total['average_predicted_speakers']),
+            automatic_count_MAE=auto_total['speaker_count_mae'],
+            oracle_count_MAE=known_total['speaker_count_mae'],
+            count_MAE_delta=(auto_total['speaker_count_mae']
+                             - known_total['speaker_count_mae']),
+            automatic_count_accuracy=auto_total['speaker_count_accuracy'],
+            oracle_count_accuracy=known_total['speaker_count_accuracy'],
+            automatic_speaker_error_seconds=auto_total['speaker_error_seconds'],
+            oracle_count_speaker_error_seconds=known_total['speaker_error_seconds'],
+            speaker_error_seconds_delta=(auto_total['speaker_error_seconds']
+                                         - known_total['speaker_error_seconds']),
+            recordings_improved=sum(value > 1e-9 for value in der_deltas),
+            recordings_worsened=sum(value < -1e-9 for value in der_deltas),
+            recordings_unchanged=sum(abs(value) <= 1e-9 for value in der_deltas),
+        ),
+        recordings=rows,
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for key in ('audio_dir','ref_rttm_dir','output_dir'):
         parser.add_argument('--'+key, required=True)
     parser.add_argument('--model', default='exps/exp1/model/model_0034.model')
-    parser.add_argument('--experiment', choices=['baseline','clustering','ahc_threshold','ahc_stability','vad_threshold','vad_silence','window','speaker_count','centroid_merge','all'], default='clustering')
+    parser.add_argument('--experiment', choices=['baseline','clustering','clustering_count','ahc_threshold','ahc_stability','vad_threshold','vad_silence','window','speaker_count','centroid_merge','all'], default='clustering')
     parser.add_argument('--method', choices=['ahc','spectral','nme_sc'], default='ahc')
+    parser.add_argument('--count_estimator', choices=['adaptive_ahc'])
     parser.add_argument('--threshold', type=float, default=0.65)
     parser.add_argument('--vad_threshold', type=float, default=0.5)
     parser.add_argument('--vad_min_silence_ms', type=int, default=100)
@@ -207,13 +295,14 @@ def main():
     set_seed(args.seed)
     encoder = load_model(args.model, args.device)
     embedding_cache = {}
-    fields = ['method','ahc_threshold','vad_threshold','vad_min_speech_ms','vad_min_silence_ms',
+    fields = ['method','count_estimator','ahc_threshold','vad_threshold','vad_min_speech_ms','vad_min_silence_ms',
               'vad_speech_pad_ms','window_sec','step_sec','min_segment_sec','speaker_mode',
               'centroid_merge','centroid_similarity_threshold','max_small_cluster_size',
               'DER','Miss','FalseAlarm','SpeakerError','SpeakerCountAccuracy','SpeakerCountMAE',
               'OverclusteringRate','UnderclusteringRate','AveragePredictedSpeakers',
               'AverageReferenceSpeakers','EmbeddingCacheHits','ElapsedSeconds',
-              'PeakPythonMemoryMB','config_id']
+              'ClusteringSeconds','PeakPythonMemoryMB','config_id']
+    speaker_count_results = {}
     with (out / 'results.csv').open('w', newline='', encoding='utf-8') as handle:
         writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
@@ -246,6 +335,7 @@ def main():
                 else:
                     traces[file_id] = {}
                     diarize(str(audio), args.model, n_speakers=n, method=config['method'],
+                            count_estimator=config['count_estimator'],
                             threshold=config['ahc_threshold'], vad_threshold=config['vad_threshold'],
                             window_sec=config['window_sec'], step_sec=config['step_sec'],
                             output_rttm=str(rttm), seed=args.seed, device=args.device,
@@ -266,6 +356,8 @@ def main():
                 runtimes[file_id] = time.perf_counter() - recording_started
             result = evaluate_annotations(refs, hypotheses, args.collar, args.skip_overlap,
                                           durations, uem_data)
+            if args.experiment == 'speaker_count':
+                speaker_count_results[config['speaker_mode']] = result
             save_results(result, folder / 'der.json', folder / 'per_file.csv')
             diagnostic_rows = [diagnostic_row(file_id, args.model, config, traces[file_id], result[file_id])
                                for file_id in sorted(audios)]
@@ -303,6 +395,8 @@ def main():
                 'EmbeddingCacheHits':sum(trace.get('embedding_cache_hit', False)
                                          for trace in traces.values()),
                 'ElapsedSeconds':time.perf_counter() - started,
+                'ClusteringSeconds':sum(trace.get('clustering_runtime_seconds', 0.)
+                                        for trace in traces.values()),
                 'PeakPythonMemoryMB':peak_memory / (1024 * 1024)})
             handle.flush()
             if baseline:
@@ -310,6 +404,10 @@ def main():
                 for manifest_name in ('experiment_manifest.json', 'manifest.json'):
                     (out / manifest_name).write_text(json.dumps(metadata, indent=2), encoding='utf-8')
             print(f"{config_id}: DER={total['DER']}")
+    if args.experiment == 'speaker_count':
+        (out / 'oracle_count_diagnostics.json').write_text(
+            json.dumps(oracle_count_diagnostics(speaker_count_results), indent=2),
+            encoding='utf-8')
 
 
 if __name__ == '__main__':
