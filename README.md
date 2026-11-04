@@ -16,6 +16,7 @@ AHC/spectral clustering → RTTM. Архитектура ECAPA-TDNN сохран
 - `configs/`: проверяемые YAML-конфигурации с приоритетом CLI → YAML → defaults.
 - `docs/DIARIZATION.md`: overclustering, режимы inference и воспроизводимые ablations.
 - `docs/EMBEDDING_ERROR_ANALYSIS.md`: optional embedding/AHC/postprocessing diagnostics and PowerShell workflow.
+- `docs/CORRECTED_VIYT_DIAR_EVALUATION.md`: frozen corrected-encoder ViYT-Diar reproduction and its limitations.
 - `tests/`: CPU unit tests на синтетических данных без скачивания датасетов.
 
 ## Установка
@@ -420,8 +421,14 @@ the affected inference source used `Conv -> BatchNorm -> ReLU`. Strict loading
 cannot detect this operation-order mismatch because parameter names and shapes are
 unchanged. The production order is now restored and protected by a regression
 test. All embeddings and downstream results produced by the wrong-order encoder
-must be regenerated; this fix is not evidence of improved diarization quality.
-See [`docs/ECAPA_CHECKPOINT_AUDIT.md`](docs/ECAPA_CHECKPOINT_AUDIT.md).
+must be regenerated; this fix alone is not evidence of improved diarization quality.
+The frozen corrected run subsequently reproduced all 100 preserved historical
+RTTM files byte-for-byte. With the published references it reproduced corpus DER
+15.1240% (Miss 1.1813%, FA 4.9282%, SpeakerError 9.0144%), count accuracy 60%,
+and count MAE 0.65. A separate sensitivity score, using the same hypotheses and
+manual-audit references for three recordings, gave DER 12.8687%; it is not the
+official benchmark. See [`docs/ECAPA_CHECKPOINT_AUDIT.md`](docs/ECAPA_CHECKPOINT_AUDIT.md)
+and the full [`corrected ViYT-Diar evaluation`](docs/CORRECTED_VIYT_DIAR_EVALUATION.md).
 
 The existing ViYT-Diar test set was already used for exploratory analysis and
 must not be used to select new production parameters.

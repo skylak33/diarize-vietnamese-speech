@@ -174,6 +174,31 @@ counterfactual postprocessing traces, and four reproducible plots. Diagnostic
 artifacts are provenance-bound and must not be used to tune production settings
 on the previously used ViYT-Diar test set.
 
+## Corrected-encoder frozen reproduction
+
+The checkpoint-compatible `Bottle2neck` order is
+`Conv1d -> ReLU -> BatchNorm1d`. With checkpoint SHA-256
+`58f3b402afa1de3c0a2543e845267146544be7ba74cad1a38cb4d26303afd325`
+and encoder-source SHA-256
+`96cd2147b769f3730d11eaabefedb3f3b52c3913f87f74d01b208d4bf92b14d8`,
+the frozen AHC 0.75/VAD 200 ms configuration evaluated exactly 100 recordings
+without failures. Every generated RTTM had the same SHA-256 as its preserved
+historical counterpart.
+
+Scoring used full audio, a 0.25-second collar, included overlap, and pooled
+component seconds. No UEM or oracle speaker count was used.
+
+| Reference mode | DER | Miss | FA | SpeakerError | Count accuracy | Count MAE | Over | Under |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Published reference | 15.1240 | 1.1813 | 4.9282 | 9.0144 | 0.60 | 0.65 | 0.26 | 0.14 |
+| Manual-audit sensitivity | 12.8687 | 1.7092 | 2.3043 | 8.8552 | 0.61 | 0.62 | 0.25 | 0.14 |
+
+The sensitivity row substitutes manually audited references only for
+`C4HFERLpRfI`, `Uaq5N3FbQb4`, and `ed0Vt0NxJUI`; the hypotheses are identical.
+Those broad reviewed turns may include pauses and are not an official ViYT-Diar
+reference. See [`CORRECTED_VIYT_DIAR_EVALUATION.md`](CORRECTED_VIYT_DIAR_EVALUATION.md)
+for provenance, commands, and diagnostic scope.
+
 ## ViYT-Diar exploratory measurements
 
 The historical baseline and the new runs use all 100 ViYT-Diar test recordings

@@ -125,6 +125,24 @@ SHA-256 hashes also match the preserved historical RTTMs. This explains the
 observed contradiction while leaving the complete historical dirty source
 snapshot unresolved.
 
+## Corrected full-corpus validation
+
+The follow-up frozen run used Git commit
+`eb08eb579018ce6107a7600c6aa22cad6654b3fb`, encoder-source SHA-256
+`96cd2147b769f3730d11eaabefedb3f3b52c3913f87f74d01b208d4bf92b14d8`,
+and the unchanged checkpoint. It processed all 100 recordings without failures
+and reproduced 100/100 preserved historical RTTM SHA-256 hashes. The published
+full-audio score was DER 15.123975%, consisting of Miss 1.181326%, false alarm
+4.928228%, and SpeakerError 9.014420%. Speaker-count accuracy was 60% and MAE
+was 0.65.
+
+This exact reproduction links the historical RTTMs to the checkpoint-compatible
+graph; it does not turn the reused ViYT-Diar test set into an independent
+generalization result. The wrong-order 19-recording artifacts remain isolated
+under `results/embedding_analysis`, while regenerated corrected artifacts use
+`results/embedding_analysis_corrected`. Full protocol and limitations are in
+[`CORRECTED_VIYT_DIAR_EVALUATION.md`](CORRECTED_VIYT_DIAR_EVALUATION.md).
+
 ## Artifact invalidation
 
 All embeddings, caches, similarity summaries, AHC traces, RTTMs, DER, and
@@ -133,10 +151,9 @@ the corrected encoder. Keep them only as fault-reproduction evidence. Do not mix
 old and regenerated embeddings in one corpus report, and do not relabel the old
 results as a corrected baseline.
 
-No AHC, VAD, centering, PLDA, or checkpoint parameters were changed. No threshold
-was tuned on ViYT-Diar. The next justified action is to regenerate embeddings with
-the fixed encoder, record source/checkpoint/audio hashes, and evaluate the frozen
-configuration. Any later calibration must use independent development data.
+No AHC, VAD, centering, PLDA, or checkpoint parameters were changed in the
+reproduction. Corrected embeddings were regenerated with source/checkpoint/audio
+hashes recorded. Any later calibration must use independent development data.
 
 ## Reproduction on Windows PowerShell
 

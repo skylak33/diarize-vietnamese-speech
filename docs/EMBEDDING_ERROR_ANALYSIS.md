@@ -14,8 +14,10 @@ were reproduced exactly by the wrong-order audit variant. They are valid
 evidence about that faulty inference graph, but are invalid for assessing the
 corrected encoder. Their one-speaker RTTMs, DER, SpeakerError, similarity
 statistics, and AHC traces must not be presented as corrected-model results.
-Regenerate embeddings before any new clustering or evaluation. The compatibility
-fix itself is not a measured quality improvement.
+They remain isolated under `results/embedding_analysis`. The corrected run
+regenerated all 1,317 windows under `results/embedding_analysis_corrected` and
+reproduced the complete historical RTTM set; the compatibility fix by itself is
+still not a quality-improvement claim.
 
 The audit also corrected the distribution-overlap estimator. Across the same 19
 wrong-order artifacts, fixed-range overlap was `1.0` for every recording, while
@@ -24,6 +26,57 @@ diagnostic AUC calculation was unchanged (range `0.470921`-`0.734056`, median
 `0.583723`). These pairwise statistics are descriptive because overlapping
 windows and repeated pairs are dependent. Full methodology and reproduction
 commands are in [ECAPA_CHECKPOINT_AUDIT.md](ECAPA_CHECKPOINT_AUDIT.md).
+
+## Corrected 19-recording diagnostics
+
+The corrected artifacts use encoder-source SHA-256
+`96cd2147b769f3730d11eaabefedb3f3b52c3913f87f74d01b208d4bf92b14d8`
+and the unchanged checkpoint. Across the 19 per-recording reference-aware
+summaries, the mean same-speaker cosine was 0.4973 and the mean
+different-speaker cosine was 0.3075. Per-recording diagnostic AUC had mean
+0.8555, median 0.8508, and range 0.6307-0.9834; median KS was 0.5905,
+median Wasserstein distance 0.1801, and median distribution overlap 0.4131.
+These unweighted summaries describe the selected recordings and are not a
+corpus-wide or independent-sample performance estimate.
+
+The corrected count relations are 4 correct-count, 14 undercount, and 1
+overcount. Reference-aware merge tracing found at least one merge joining
+reference-distinct speakers in every selected recording, but reference overlap,
+window mixing, and label alignment limit causal attribution. The automated
+summary assigns low confidence to 18 cases and unknown confidence to
+`jxTaydBnwIg`; it confirms no physical root cause. AHC overmerging,
+fragmentation, mixed windows, and smoothing are candidate mechanisms for manual
+review, not confirmed explanations.
+
+| Recording | Count relation | SpeakerError s | AUC | Reference-distinct merges | Initial/final clusters |
+| --- | --- | ---: | ---: | ---: | ---: |
+| `98EV6H0ZRlU` | correct | 15.312 | 0.940 | 1 | 2/2 |
+| `B5rLHPUJ8qc` | correct | 11.810 | 0.825 | 1 | 3/2 |
+| `jxTaydBnwIg` | correct | 9.000 | 0.947 | 1 | 2/2 |
+| `XSC94UbpoRQ` | correct | 7.250 | 0.758 | 1 | 2/2 |
+| `Hx0j-Oc18do` | undercount | 22.406 | 0.851 | 1 | 1/1 |
+| `9lm02QThHjo` | undercount | 21.664 | 0.931 | 1 | 1/1 |
+| `sVPA0POzHFQ` | undercount | 20.225 | 0.782 | 1 | 1/1 |
+| `IZxOT44FKsU` | undercount | 19.485 | 0.983 | 1 | 1/1 |
+| `HTwksOmzTsc` | undercount | 18.539 | 0.901 | 1 | 1/1 |
+| `kmP3mlKeGRY` | undercount | 17.677 | 0.831 | 1 | 1/1 |
+| `_5qHkZ0miYY` | undercount | 16.788 | 0.772 | 1 | 1/1 |
+| `XJG-o9BK4To` | undercount | 13.207 | 0.894 | 1 | 3/1 |
+| `lDvnabH6iyY` | undercount | 10.135 | 0.829 | 1 | 1/1 |
+| `kkPMThxTwq0` | undercount | 9.448 | 0.848 | 1 | 1/1 |
+| `hRYWiO-zi5s` | undercount | 7.790 | 0.859 | 1 | 1/1 |
+| `kBbOVOaU6cc` | undercount | 6.422 | 0.967 | 1 | 1/1 |
+| `LNdIO_4fRuI` | undercount | 5.870 | 0.737 | 2 | 1/1 |
+| `sxOvp1cgE14` | undercount | 4.884 | 0.969 | 1 | 1/1 |
+| `jE9ZB-zqEgs` | overcount | 35.496 | 0.631 | 4 | 10/10 |
+
+The largest selected-case error is `jE9ZB-zqEgs`: ten clusters for two
+reference speakers and 35.496 SpeakerError seconds. Its low AUC relative to the
+other selected recordings is consistent with difficult embedding separation,
+but does not identify recording conditions as the cause. `B5rLHPUJ8qc` and
+`XJG-o9BK4To` are the only selected cases where the final cluster count changed
+after the initial AHC stage; the summary flags temporal smoothing as a candidate,
+not a proven cause.
 
 ## Diagnostic architecture
 
