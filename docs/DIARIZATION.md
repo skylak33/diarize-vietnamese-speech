@@ -21,6 +21,21 @@ second-best target. Rejected fragments keep their original assignments. The
 stage is skipped when `n_speakers` is supplied so it cannot violate an explicit
 speaker-count constraint.
 
+Adaptive AHC count estimation is also opt-in:
+
+```powershell
+python -m diarize.pipeline "data\audio\sample.wav" `
+  --model "exps\exp1\model\model_0034.model" `
+  --method ahc --count_estimator adaptive_ahc `
+  --output "results\adaptive\sample.rttm"
+```
+
+It finds an outlying gap in the complete AHC merge-distance hierarchy and falls
+back to the configured fixed threshold when the hierarchy has no decisive gap.
+The repository default remains fixed-threshold AHC. See
+[`SPEAKER_CLUSTERING_IMPROVEMENTS.md`](SPEAKER_CLUSTERING_IMPROVEMENTS.md) for
+the stopping rule, complexity, fair comparison protocol and limitations.
+
 ## Inference
 
 The historical CLI remains valid:
@@ -142,6 +157,8 @@ Supported series:
 - `window`: window/step 1.5/0.75, 2.0/1.0, 3.0/1.5 seconds;
 - `vad_silence`: 100, 200, 300 ms;
 - `speaker_count`: oracle known count and automatic count;
+- `clustering_count`: fixed AHC, adaptive AHC, spectral and NME-SC under the
+  same segmentation settings, all with automatic count;
 - `clustering`: AHC, spectral with silhouette count selection, and NME-SC;
 - `vad_threshold` and `all` remain available.
 
@@ -262,6 +279,24 @@ SpeakerError 9.0144, count accuracy 0.60, and count MAE 0.65. Supplying the
 reference count as an oracle produced DER 13.0825, SpeakerError 6.9730, count
 accuracy 0.91, and count MAE 0.09. The oracle result is an upper-bound diagnostic
 and must never be reported as automatic performance.
+
+The validated paired values before display rounding are automatic DER
+`15.1239746592`, SpeakerError `9.0144201731`, and oracle-count DER
+`13.0825466601`, SpeakerError `6.9729921740`. Automatic RTTMs reproduced the
+frozen baseline for all 100 recordings. SpeakerError time changed from
+`399.252003` to `308.836402` seconds; 28 recordings improved, 10 worsened and 62
+were unchanged. Nine requested two-speaker recordings still lost one identity
+during postprocessing. These are reused-test diagnostics, not evidence for a
+production setting.
+
+### Smoothing counterfactual
+
+For `XJG-o9BK4To`, the trace changes from three initial clusters to one after
+temporal smoothing. Disabling smoothing does not improve the measured result:
+current smoothing gives DER `37.35515`, versus `37.78454` without smoothing.
+No smoothing change is promoted. This is a single-recording, reused-test
+diagnostic; the exact PowerShell workflow is in
+[`SPEAKER_CLUSTERING_IMPROVEMENTS.md`](SPEAKER_CLUSTERING_IMPROVEMENTS.md).
 
 ### Backend comparison
 
