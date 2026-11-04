@@ -172,7 +172,7 @@ def _load_evaluation(path):
         raise ValueError(f"Evaluation artifact does not exist: {path}")
     if path.suffix.lower() == ".csv":
         with path.open(newline="", encoding="utf-8") as handle:
-            rows = list(csv.DictReader(handle))
+            rows = [row for row in csv.DictReader(handle) if row.get("file") != "__total__"]
         parsed = [_metric_row(row, path) for row in rows]
     elif path.suffix.lower() == ".json":
         payload = _json(path)

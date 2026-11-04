@@ -41,6 +41,17 @@ def _metrics(path, rows):
         writer.writerows(rows)
 
 
+def test_evaluation_loader_ignores_corpus_total_row(tmp_path):
+    metrics = tmp_path / "metrics.csv"
+    _metrics(metrics, [
+        {"file": "sample", "DER": 1, "speaker_error": 2},
+        {"file": "__total__", "DER": 1, "speaker_error": 2},
+    ])
+
+    assert analysis._load_evaluation(metrics) == {
+        "sample": {"DER": 1.0, "SpeakerError": 2.0}}
+
+
 def test_build_report_attributes_count_errors_and_oracle_identity_loss(tmp_path):
     automatic, oracle, references = (tmp_path / name for name in ("automatic", "oracle", "ref"))
     references.mkdir()
