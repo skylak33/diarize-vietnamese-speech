@@ -9,6 +9,7 @@ from experiments.analyze_diarization_errors import (
 
 def metric(n_ref, n_pred, speaker_error_seconds, duration=10):
     return dict(N_ref=n_ref, N_pred=n_pred, duration=duration,
+                miss_seconds=0, false_alarm_seconds=0,
                 speaker_error_seconds=speaker_error_seconds,
                 DER=0, miss=0, false_alarm=0, speaker_error=100 * speaker_error_seconds / duration)
 
@@ -43,6 +44,7 @@ def test_speaker_error_summary_separates_count_causes():
     assert summary['correct_count']['speaker_error_rate'] == 20
     assert summary['wrong_count']['recordings'] == 2
     assert summary['wrong_count']['speaker_error_seconds'] == 8
+    assert summary['wrong_count']['miss_seconds'] == 0
     assert summary['overcount']['recordings'] == summary['undercount']['recordings'] == 1
 
 
@@ -100,6 +102,10 @@ def test_temporal_diagnostic_serializes_long_errors_and_boundaries():
         'delta': 1.0,
         'within_tolerance': False,
     }
+    row = diagnostic_row('sample', 6, reference, metric(2, 2, 1, duration=6),
+                         temporal=result, long_error_threshold=.75)
+    assert row['long_confusion_seconds'] == 1
+    assert row['boundary_adjacent_confusion_seconds'] == .25
 
 
 def test_prepared_collar_gaps_are_not_reintroduced():

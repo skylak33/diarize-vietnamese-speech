@@ -118,6 +118,25 @@ def analyze_recording(artifact_dir, reference_segments=None, min_reference_cover
         candidate_causes.append("segment_postprocessing")
     if classification_counts.get("mixed_speaker_window", 0):
         candidate_causes.append("mixed_speaker_windows")
+    auc = None if reference_stats is None else reference_stats["diagnostic_auc"]
+    overlap = None if reference_stats is None else reference_stats["distribution_overlap"]
+    if reference_speakers is not None and final_count < reference_speakers and initial_count < reference_speakers:
+        conclusion = ("ahc_overmerging_despite_embedding_signal"
+                      if auc is not None and auc > .5 else
+                      "embedding_overlap_and_ahc_overmerging")
+    elif reference_speakers is not None and final_count < reference_speakers and smoothed_count < initial_count:
+        conclusion = "temporal_smoothing_overmerging"
+    elif reference_speakers is not None and final_count > reference_speakers:
+        conclusion = ("ahc_fragmentation_with_embedding_overlap"
+                      if overlap is not None and overlap >= .5 else "ahc_fragmentation")
+    elif reference_speakers is not None and initial_count > reference_speakers and smoothing_changes:
+        conclusion = "ahc_fragmentation_resolved_by_smoothing_with_residual_error"
+    elif smoothing_changes:
+        conclusion = "temporal_smoothing_changed_assignments"
+    elif classification_counts.get("mixed_speaker_window", 0):
+        conclusion = "mixed_windows_with_residual_assignment_error"
+    else:
+        conclusion = "residual_temporal_assignment_error"
 
     evidence = {
         "embedding_discriminability": {
@@ -149,6 +168,7 @@ def analyze_recording(artifact_dir, reference_segments=None, min_reference_cover
         "speaker_error_seconds": speaker_error_seconds,
         "evidence": evidence,
         "candidate_causes": candidate_causes,
+        "evidence_based_conclusion": conclusion,
         "confirmed_causes": [],
         "confidence": "low" if candidate_causes else "unknown",
         "recommended_next_action": ("Review reference-distinct AHC merges and temporal changes"
@@ -171,14 +191,25 @@ def analyze_recording(artifact_dir, reference_segments=None, min_reference_cover
     return payload
 
 
-def _count_relation(recording_id):
-    if recording_id in UNDERCOUNT_IDS:
-        return "undercount"
-    if recording_id in OVERCOUNT_IDS:
-        return "overcount"
-    if recording_id in CORRECT_COUNT_IDS:
-        return "correct_count"
-    return None
+def _load_current_metrics(path):
+    """Load current evaluation counts; historical target groups are not outcomes."""
+    if path is None:
+        return {}
+    with Path(path).open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    result = {}
+    for row in rows:
+        recording_id = row.get("file", row.get("recording_id"))
+        if not recording_id or not row.get("N_ref") or not row.get("N_pred"):
+            continue
+        n_ref, n_pred = int(row["N_ref"]), int(row["N_pred"])
+        relation = ("correct_count" if n_ref == n_pred else
+                    "overcount" if n_pred > n_ref else "undercount")
+        result[recording_id] = {
+            "count_relation": relation,
+            "speaker_error_seconds": float(row["speaker_error_seconds"]),
+        }
+    return result
 
 
 def main(argv=None):
@@ -189,6 +220,7 @@ def main(argv=None):
     parser.add_argument("--recording_id", action="append")
     parser.add_argument("--min_reference_coverage", type=float, default=.8)
     parser.add_argument("--max_windows", type=int, default=5000)
+    parser.add_argument("--metrics_csv", help="Current per-recording evaluation CSV")
     args = parser.parse_args(argv)
     root = Path(args.artifacts)
     selected = set(args.recording_id or [])
@@ -198,15 +230,19 @@ def main(argv=None):
     if not directories:
         parser.error("No matching diagnostic artifact directories")
     references = load_rttm(args.reference_rttm) if args.reference_rttm else {}
+    metrics = _load_current_metrics(args.metrics_csv)
     rows = [analyze_recording(
         path, references.get(path.name), args.min_reference_coverage, args.max_windows,
-        count_relation=_count_relation(path.name)) for path in directories]
+        count_relation=metrics.get(path.name, {}).get("count_relation"),
+        speaker_error_seconds=metrics.get(path.name, {}).get("speaker_error_seconds"))
+        for path in directories]
     output_dir = Path(args.output_dir or root)
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "summary.json").write_text(
         json.dumps({"recordings": rows}, indent=2, sort_keys=True), encoding="utf-8")
     with (output_dir / "summary.csv").open("w", newline="", encoding="utf-8") as handle:
-        fields = ["recording_id", "count_relation", "speaker_error_seconds", "candidate_causes",
+        fields = ["recording_id", "count_relation", "speaker_error_seconds",
+                  "evidence_based_conclusion", "candidate_causes",
                   "confirmed_causes", "confidence", "recommended_next_action"]
         writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()

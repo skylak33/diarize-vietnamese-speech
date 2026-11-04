@@ -1,4 +1,5 @@
 import json
+import csv
 
 import numpy as np
 
@@ -7,6 +8,7 @@ from diarize.embedding_diagnostics import (_distribution_comparison, _distributi
                                            classify_reference_windows, cluster_similarity_stats,
                                            cosine_similarity_matrix, reference_similarity_stats,
                                            validate_embeddings, write_artifacts)
+from experiments.analyze_embedding_diagnostics import _load_current_metrics
 
 
 def _mock_pipeline(monkeypatch):
@@ -131,6 +133,18 @@ def test_reference_source_is_metadata_and_cannot_change_diagnostic_rttm(tmp_path
         config = json.loads((directory / "sample" / "config.json").read_text())
         assert config["reference_source"] == source
     assert outputs["manual_reference"] == outputs["published_reference"]
+
+
+def test_current_metrics_override_historical_target_groups(tmp_path):
+    path = tmp_path / "per_file.csv"
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=[
+            "file", "N_ref", "N_pred", "speaker_error_seconds"])
+        writer.writeheader()
+        writer.writerow({"file": "Hx0j-Oc18do", "N_ref": 2, "N_pred": 2,
+                         "speaker_error_seconds": 1.25})
+    assert _load_current_metrics(path)["Hx0j-Oc18do"] == {
+        "count_relation": "correct_count", "speaker_error_seconds": 1.25}
 
 
 def test_compactness_is_scale_invariant_and_artifacts_reject_non_normalized_rows(tmp_path):

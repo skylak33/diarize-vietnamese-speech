@@ -201,7 +201,8 @@ def temporal_diagnostic(reference, hypothesis, effective_uem, mapping,
 
 def diagnostic_row(file_id, audio_duration, reference, metric, vad_segments=None,
                    max_reference_coverage=0.5, min_vad_outside_reference_sec=5.0,
-                   observations=None, temporal=None, reference_status='unverified'):
+                   observations=None, temporal=None, reference_status='unverified',
+                   long_error_threshold=2., boundary_tolerance=.25):
     """Build one evidence row without changing annotations or scoring."""
     reference_intervals = _merged_intervals(reference)
     reference_speech = _duration(reference_intervals)
@@ -230,6 +231,14 @@ def diagnostic_row(file_id, audio_duration, reference, metric, vad_segments=None
     if invalid:
         raise ValueError(f'Unknown observations: {sorted(invalid)}')
 
+    confusion_intervals = ([interval for interval in temporal['error_intervals']
+                            if interval['kind'] == 'speaker_confusion'] if temporal else [])
+    boundary_zones = (_merged_intervals([
+        (max(0., point - boundary_tolerance), point + boundary_tolerance)
+        for start, end, _ in reference for point in (start, end)]) if temporal else [])
+    boundary_confusion = sum(
+        _overlap_duration([(item['start'], item['end'])], boundary_zones) * item['speaker_count']
+        for item in confusion_intervals)
     return dict(
         recording_id=file_id,
         audio_duration=audio_duration,
@@ -247,7 +256,11 @@ def diagnostic_row(file_id, audio_duration, reference, metric, vad_segments=None
         DER=metric['DER'], Miss=metric['miss'], FalseAlarm=metric['false_alarm'],
         SpeakerError=metric['speaker_error'],
         reference_speaker_seconds=metric['duration'],
+        miss_seconds=metric['miss_seconds'], false_alarm_seconds=metric['false_alarm_seconds'],
         speaker_error_seconds=speaker_error,
+        long_confusion_seconds=sum(item['speaker_seconds'] for item in confusion_intervals
+                                   if item['duration'] >= long_error_threshold),
+        boundary_adjacent_confusion_seconds=boundary_confusion,
         error_intervals=temporal['error_intervals'] if temporal else [],
         reference_status=reference_status,
         temporal=temporal,
@@ -265,6 +278,8 @@ def speaker_error_summary(rows):
         reference = sum(row['reference_speaker_seconds'] for row in selected)
         error = sum(row['speaker_error_seconds'] for row in selected)
         groups[name] = dict(recordings=len(selected), reference_speaker_seconds=reference,
+                            miss_seconds=sum(row['miss_seconds'] for row in selected),
+                            false_alarm_seconds=sum(row['false_alarm_seconds'] for row in selected),
                             speaker_error_seconds=error,
                             speaker_error_rate=100 * error / reference if reference else None)
     return groups
@@ -277,6 +292,8 @@ def main():
     parser.add_argument('--hyp_rttm_dir', required=True)
     parser.add_argument('--output', required=True)
     parser.add_argument('--csv')
+    parser.add_argument('--summary_csv', help='Aggregate error components by count category')
+    parser.add_argument('--top_csv', help='Ranked, flattened per-recording error table')
     parser.add_argument('--recording_id', action='append')
     parser.add_argument('--run_vad', action='store_true')
     parser.add_argument('--vad_threshold', type=float, default=0.5)
@@ -337,7 +354,8 @@ def main():
                           N_pred=_annotation_speaker_count(prepared[1]))
         row = diagnostic_row(
             file_id, durations[file_id], references[file_id], metric, vad.get(file_id),
-            args.max_reference_coverage, args.min_vad_outside_reference_sec, temporal=temporal)
+            args.max_reference_coverage, args.min_vad_outside_reference_sec, temporal=temporal,
+            long_error_threshold=args.long_error_threshold, boundary_tolerance=args.collar)
         if args.speaker_count_status is None or row['speaker_count_status'] == args.speaker_count_status:
             rows.append(row)
     if not rows:
@@ -362,6 +380,34 @@ def main():
             writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
             writer.writeheader()
             writer.writerows(rows)
+    if args.summary_csv:
+        summary_path = Path(args.summary_csv)
+        summary_path.parent.mkdir(parents=True, exist_ok=True)
+        summary = payload['speaker_error_by_count']
+        fields = ['category', *next(iter(summary.values())).keys()]
+        with summary_path.open('w', newline='', encoding='utf-8') as handle:
+            writer = csv.DictWriter(handle, fieldnames=fields)
+            writer.writeheader()
+            for category, values in summary.items():
+                writer.writerow({'category': category, **values})
+    if args.top_csv:
+        fields = [
+            'rank', 'recording_id', 'speaker_count_status', 'n_ref', 'n_pred',
+            'speaker_error_seconds', 'SpeakerError', 'miss_seconds', 'Miss',
+            'false_alarm_seconds', 'FalseAlarm', 'DER', 'long_confusion_seconds',
+            'boundary_adjacent_confusion_seconds', 'long_confusion_interval_count']
+        ranked = sorted(rows, key=lambda row: (-row['speaker_error_seconds'], row['recording_id']))
+        top_path = Path(args.top_csv)
+        top_path.parent.mkdir(parents=True, exist_ok=True)
+        with top_path.open('w', newline='', encoding='utf-8') as handle:
+            writer = csv.DictWriter(handle, fieldnames=fields)
+            writer.writeheader()
+            for rank, row in enumerate(ranked, 1):
+                writer.writerow({**{key: row.get(key) for key in fields}, 'rank': rank,
+                                 'long_confusion_interval_count': sum(
+                                     item['kind'] == 'speaker_confusion'
+                                     and item['duration'] >= args.long_error_threshold
+                                     for item in row['error_intervals'])})
     print(json.dumps(payload['speaker_error_by_count'], indent=2))
     for row in rows:
         if row['possible_partial_reference']:
