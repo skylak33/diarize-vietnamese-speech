@@ -408,15 +408,14 @@ def main():
                                         for trace in traces.values()),
                 'PeakPythonMemoryMB':peak_memory / (1024 * 1024)})
             handle.flush()
-            if baseline:
-                metadata.update(status='complete', files_evaluated=len(audios), failures=[])
-                for manifest_name in ('experiment_manifest.json', 'manifest.json'):
-                    (out / manifest_name).write_text(json.dumps(metadata, indent=2), encoding='utf-8')
             print(f"{config_id}: DER={total['DER']}")
     if args.experiment == 'speaker_count':
         (out / 'oracle_count_diagnostics.json').write_text(
             json.dumps(oracle_count_diagnostics(speaker_count_results), indent=2),
             encoding='utf-8')
+    metadata.update(status='complete', files_evaluated=len(audios), failures=[])
+    for manifest_name in ('experiment_manifest.json', 'manifest.json'):
+        (out / manifest_name).write_text(json.dumps(metadata, indent=2), encoding='utf-8')
 
 
 if __name__ == '__main__':

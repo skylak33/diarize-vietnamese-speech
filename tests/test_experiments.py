@@ -84,7 +84,8 @@ def test_runner_outputs_and_oracle_count(tmp_path, monkeypatch):
     assert summary['OverclusteringRate']==summary['UnderclusteringRate']=='0.0'
     assert summary['AveragePredictedSpeakers']==summary['AverageReferenceSpeakers']=='1.0'
     assert float(summary['ElapsedSeconds']) >= 0 and float(summary['PeakPythonMemoryMB']) >= 0
-    assert (out/'experiment_manifest.json').is_file()
+    manifest=json.loads((out/'experiment_manifest.json').read_text())
+    assert manifest['status']=='complete' and manifest['files_evaluated']==1
     summary=json.loads((out/'config_001'/'centroid_merge_summary.json').read_text())
     assert summary['merge_attempts']==0 and summary['best_similarity']['count']==0
     oracle_artifact=json.loads((out/'oracle_count_diagnostics.json').read_text())
