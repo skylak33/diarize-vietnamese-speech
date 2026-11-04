@@ -14,7 +14,8 @@ def test_clustering_count_comparison_is_opt_in_and_reuses_one_cache():
                      step_sec=None, speaker_mode='automatic', experiment='clustering_count')
     configs = runner.configurations(args)
     assert [(config['method'], config['count_estimator']) for config in configs] == [
-        ('ahc', None), ('ahc', 'adaptive_ahc'), ('spectral', None), ('nme_sc', None)]
+        ('ahc', None), ('ahc', 'adaptive_ahc'), ('ahc', 'adaptive_ahc_robust'),
+        ('spectral', None), ('nme_sc', None)]
     assert {config['speaker_mode'] for config in configs} == {'automatic'}
 
 
@@ -50,20 +51,25 @@ def test_runner_outputs_and_oracle_count(tmp_path, monkeypatch):
     checkpoint=tmp_path/'model.model'; checkpoint.write_bytes(b'synthetic test fixture')
     counts=[]
     cache_ids=[]
+    diagnostic_dirs=[]
     def fake_diarize(audio_path, model_path, **kwargs):
         from pathlib import Path
         counts.append(kwargs['n_speakers'])
         cache_ids.append(id(kwargs['embedding_cache']))
+        diagnostic_dirs.append(kwargs['diagnostic_output_dir'])
         path=Path(kwargs['output_rttm']); path.parent.mkdir(parents=True,exist_ok=True)
         path.write_text(truth)
     monkeypatch.setattr('diarize.pipeline.diarize',fake_diarize)
     monkeypatch.setattr('utils.model.load_model',lambda *args:object())
     out=tmp_path/'results'
+    artifacts=tmp_path/'artifacts'
     monkeypatch.setattr(sys,'argv',['runner','--audio_dir',str(audio),'--ref_rttm_dir',str(ref),
-        '--model',str(checkpoint),'--output_dir',str(out),'--experiment','speaker_count','--collar','0'])
+        '--model',str(checkpoint),'--output_dir',str(out),'--experiment','speaker_count',
+        '--diagnostic_output_dir',str(artifacts),'--collar','0'])
     runner.main()
     rows=list(csv.DictReader((out/'results.csv').open()))
     assert len(rows)==2 and counts==[1,None] and len(set(cache_ids))==1
+    assert diagnostic_dirs == [str(artifacts/'config_000'), str(artifacts/'config_001')]
     assert rows[0]['DER']=='0.0' and rows[0]['SpeakerCountAccuracy']=='1.0'
     details=json.loads((out/'config_001'/'der.json').read_text())
     assert details['a']['N_pred']==1

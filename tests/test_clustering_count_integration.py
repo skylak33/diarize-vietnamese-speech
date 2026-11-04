@@ -79,6 +79,7 @@ def test_fair_comparison_never_injects_reference_counts_into_automatic_backends(
     assert [(row["method"], row["count_estimator"]) for row in comparison] == [
         ("ahc", None),
         ("ahc", "adaptive_ahc"),
+        ("ahc", "adaptive_ahc_robust"),
         ("spectral", None),
         ("nme_sc", None),
     ]

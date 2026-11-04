@@ -384,7 +384,7 @@ def parse_cli_args(argv=None):
     parser.add_argument("--method",          type=str, default=argparse.SUPPRESS,
                         choices=["ahc", "spectral", "nme_sc"])
     parser.add_argument("--count_estimator", default=argparse.SUPPRESS,
-                        choices=["backend_default", "adaptive_ahc"])
+                        choices=["backend_default", "adaptive_ahc", "adaptive_ahc_robust"])
     parser.add_argument("--threshold", type=float, default=argparse.SUPPRESS)
     parser.add_argument("--vad_threshold", type=float, default=argparse.SUPPRESS)
     parser.add_argument("--vad_min_speech_ms", type=int, default=argparse.SUPPRESS)

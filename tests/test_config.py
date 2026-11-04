@@ -65,6 +65,10 @@ def test_adaptive_count_estimator_is_explicit_and_opt_in(tmp_path):
     args, _ = parse_cli_args(['audio.wav', '--model', 'model.model', '--config', str(path)])
     assert args.method == 'ahc' and args.count_estimator == 'adaptive_ahc'
 
+    path.write_text('clustering:\n  count_estimator: adaptive_ahc_robust\n')
+    args, _ = parse_cli_args(['audio.wav', '--model', 'model.model', '--config', str(path)])
+    assert args.count_estimator == 'adaptive_ahc_robust'
+
 
 @pytest.mark.parametrize('content,error', [
     ('clustering:\n  thresholdd: 0.7\n', 'Unknown configuration key: clustering.thresholdd'),

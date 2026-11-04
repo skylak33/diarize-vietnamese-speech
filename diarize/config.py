@@ -66,10 +66,14 @@ def validate_config(config):
     clustering = config['clustering']
     if clustering['method'] not in {'ahc', 'spectral', 'nme_sc'}:
         raise ValueError('clustering.method must be ahc, spectral, or nme_sc')
-    if clustering['count_estimator'] not in {'backend_default', 'adaptive_ahc'}:
-        raise ValueError('clustering.count_estimator must be backend_default or adaptive_ahc')
-    if clustering['count_estimator'] == 'adaptive_ahc' and clustering['method'] != 'ahc':
-        raise ValueError('adaptive_ahc count estimation requires clustering.method=ahc')
+    if clustering['count_estimator'] not in {
+            'backend_default', 'adaptive_ahc', 'adaptive_ahc_robust'}:
+        raise ValueError(
+            'clustering.count_estimator must be backend_default, adaptive_ahc, '
+            'or adaptive_ahc_robust')
+    if (clustering['count_estimator'] in {'adaptive_ahc', 'adaptive_ahc_robust'}
+            and clustering['method'] != 'ahc'):
+        raise ValueError('adaptive AHC count estimation requires clustering.method=ahc')
     _number(clustering['threshold'], 'clustering.threshold', 0, 2)
     _integer(clustering['max_speakers'], 'clustering.max_speakers')
     merge = config['postprocessing']['centroid_merge']

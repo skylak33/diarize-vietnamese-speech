@@ -32,6 +32,8 @@ def configurations(args):
             {**base, 'method':'ahc', 'count_estimator':None, 'speaker_mode':'automatic'},
             {**base, 'method':'ahc', 'count_estimator':'adaptive_ahc',
              'speaker_mode':'automatic'},
+            {**base, 'method':'ahc', 'count_estimator':'adaptive_ahc_robust',
+             'speaker_mode':'automatic'},
             {**base, 'method':'spectral', 'count_estimator':None,
              'speaker_mode':'automatic'},
             {**base, 'method':'nme_sc', 'count_estimator':None,
@@ -219,7 +221,7 @@ def main():
     parser.add_argument('--model', default='exps/exp1/model/model_0034.model')
     parser.add_argument('--experiment', choices=['baseline','clustering','clustering_count','ahc_threshold','ahc_stability','vad_threshold','vad_silence','window','speaker_count','centroid_merge','all'], default='clustering')
     parser.add_argument('--method', choices=['ahc','spectral','nme_sc'], default='ahc')
-    parser.add_argument('--count_estimator', choices=['adaptive_ahc'])
+    parser.add_argument('--count_estimator', choices=['adaptive_ahc', 'adaptive_ahc_robust'])
     parser.add_argument('--threshold', type=float, default=0.65)
     parser.add_argument('--vad_threshold', type=float, default=0.5)
     parser.add_argument('--vad_min_silence_ms', type=int, default=100)
@@ -337,6 +339,12 @@ def main():
                         merge_rejection_reasons={})
                 else:
                     traces[file_id] = {}
+                    diagnostic_root = None
+                    if (args.diagnostic_output_dir
+                            and (not args.diagnostic_ids or file_id in args.diagnostic_ids)):
+                        diagnostic_root = str(
+                            Path(args.diagnostic_output_dir) / config_id
+                            if len(configs) > 1 else Path(args.diagnostic_output_dir))
                     diarize(str(audio), args.model, n_speakers=n, method=config['method'],
                             count_estimator=config['count_estimator'],
                             threshold=config['ahc_threshold'], vad_threshold=config['vad_threshold'],
@@ -350,9 +358,7 @@ def main():
                             vad_min_speech_ms=config['vad_min_speech_ms'],
                             vad_speech_pad_ms=config['vad_speech_pad_ms'],
                             min_segment_sec=config['min_segment_sec'], embedding_cache=embedding_cache,
-                            diagnostic_output_dir=(args.diagnostic_output_dir
-                                if args.diagnostic_output_dir and
-                                (not args.diagnostic_ids or file_id in args.diagnostic_ids) else None),
+                            diagnostic_output_dir=diagnostic_root,
                             evaluation_protocol='published_reference_full_audio',
                             reference_source=str(Path(args.ref_rttm_dir).resolve()))
                 hypotheses[file_id] = parse_rttm(str(rttm)).get(file_id, [])
