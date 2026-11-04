@@ -69,7 +69,8 @@ def test_runner_outputs_and_oracle_count(tmp_path, monkeypatch):
     assert details['a']['N_pred']==1
     diagnostics=list(csv.DictReader((out/'config_001'/'diagnostics.csv').open()))
     required={'recording_id','model_checkpoint','n_clusters_before_postmerge',
-              'n_clusters_after_postmerge','n_speakers_after_postprocess','DER',
+              'n_clusters_after_postmerge','n_clusters_after_smoothing',
+              'n_clusters_after_short_merge','n_speakers_after_postprocess','DER',
               'SpeakerError','merge_attempts','accepted_merges','rejected_merges',
               'merge_candidates','merge_rejection_reasons'}
     assert required <= diagnostics[0].keys()

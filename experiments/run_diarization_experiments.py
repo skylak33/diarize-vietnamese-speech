@@ -94,6 +94,8 @@ def diagnostic_row(file_id, model, config, trace, metric):
         n_embedding_windows=trace.get('n_embedding_windows', 0),
         n_clusters_before_postmerge=trace.get('n_clusters_before_postmerge', 0),
         n_clusters_after_postmerge=trace.get('n_clusters_after_postmerge', 0),
+        n_clusters_after_smoothing=trace.get('n_clusters_after_smoothing'),
+        n_clusters_after_short_merge=trace.get('n_clusters_after_short_merge'),
         n_speakers_after_postprocess=trace.get('n_speakers_after_postprocess', 0),
         cluster_sizes_before_postmerge=before, cluster_sizes_after_postmerge=after,
         n_singleton_clusters=sum(size == 1 for size in after),
@@ -328,6 +330,7 @@ def main():
                     rttm.write_text('', encoding='utf-8')
                     traces[file_id] = dict(n_embedding_windows=0,
                         n_clusters_before_postmerge=0, n_clusters_after_postmerge=0,
+                        n_clusters_after_smoothing=0, n_clusters_after_short_merge=0,
                         n_speakers_after_postprocess=0, cluster_sizes_before_postmerge=[],
                         cluster_sizes_after_postmerge=[], merge_attempts=0, accepted_merges=0,
                         rejected_merges=0, merge_similarity_scores=[], merge_candidates=[],

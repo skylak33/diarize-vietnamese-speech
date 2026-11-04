@@ -47,6 +47,8 @@ def test_oracle_reports_cluster_lost_in_smoothing(monkeypatch):
     trace = {}
     pipeline.diarize('sample.wav', 'unused', encoder=object(), n_speakers=2, diagnostics=trace)
     assert trace['n_clusters_before_postprocess'] == 2
+    assert trace['n_clusters_after_smoothing'] == 1
+    assert trace['n_clusters_after_short_merge'] == 1
     assert trace['n_speakers_after_postprocess'] == 1
 
 

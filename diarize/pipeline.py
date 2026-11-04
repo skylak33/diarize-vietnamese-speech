@@ -162,7 +162,8 @@ def diarize(
     set_seed(seed)
     if diagnostics is not None:
         diagnostics.update(requested_n_speakers=n_speakers, n_embedding_windows=0,
-                           n_clusters_before_postprocess=0, n_speakers_after_postprocess=0,
+                           n_clusters_before_postprocess=0, n_clusters_after_smoothing=0,
+                           n_clusters_after_short_merge=0, n_speakers_after_postprocess=0,
                            cluster_sizes=[], n_clusters_before_postmerge=0,
                            n_clusters_after_postmerge=0,
                            cluster_sizes_before_postmerge=[],
@@ -286,12 +287,16 @@ def diarize(
     print(f"\n[diarize] === Шаг 5: Постобработка ===")
     labels = smooth_labels(sub_segs, labels, window=3)
     labels_after_smoothing = labels.copy()
+    if diagnostics is not None:
+        diagnostics['n_clusters_after_smoothing'] = len(set(labels))
     sub_segs = partition_overlapping_windows(sub_segs)
     partitioned_segments = list(sub_segs)
     partitioned_labels = labels.copy()
     sub_segs, labels = merge_short_segments(sub_segs, labels, min_duration=0.3)
     segments_after_short_merge = list(sub_segs)
     labels_after_short_merge = labels.copy()
+    if diagnostics is not None:
+        diagnostics['n_clusters_after_short_merge'] = len(set(labels))
     sub_segs, labels = merge_consecutive_segments(sub_segs, labels, gap_threshold=0.0)
     if diagnostics is not None:
         diagnostics['n_speakers_after_postprocess'] = len(set(labels))
