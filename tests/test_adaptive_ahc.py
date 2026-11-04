@@ -51,22 +51,24 @@ def test_fallback_respects_count_bound_and_fixed_threshold_semantics():
     assert count == trace['fallback_n_speakers'] == 2
 
 
-def test_adaptive_ahc_is_deterministic_bounded_and_handles_identical_embeddings():
+@pytest.mark.parametrize('estimator', ['adaptive_ahc', 'adaptive_ahc_robust'])
+def test_adaptive_ahc_is_deterministic_bounded_and_handles_identical_embeddings(estimator):
     embeddings = np.vstack([
         np.tile([1.0, 0.0, 0.0], (3, 1)),
         np.tile([0.0, 1.0, 0.0], (3, 1)),
         np.tile([0.0, 0.0, 1.0], (3, 1)),
     ])
     diagnostics = {}
-    first = cluster_embeddings(embeddings, count_estimator='adaptive_ahc',
+    first = cluster_embeddings(embeddings, count_estimator=estimator,
                                max_speakers=2, diagnostics=diagnostics)
-    second = cluster_embeddings(embeddings, count_estimator='adaptive_ahc', max_speakers=2)
+    second = cluster_embeddings(embeddings, count_estimator=estimator, max_speakers=2)
 
     assert np.array_equal(first, second)
     assert len(set(first)) == 2
     assert diagnostics['ahc']['estimated_n_speakers'] == 2
+    assert diagnostics['ahc']['estimator'] == estimator
     assert diagnostics['ahc']['gaps']
-    assert cluster_embeddings(np.ones((5, 3)), count_estimator='adaptive_ahc').tolist() == [0] * 5
+    assert cluster_embeddings(np.ones((5, 3)), count_estimator=estimator).tolist() == [0] * 5
 
 
 def test_adaptive_ahc_cuts_the_fitted_hierarchy_without_refitting(monkeypatch):
