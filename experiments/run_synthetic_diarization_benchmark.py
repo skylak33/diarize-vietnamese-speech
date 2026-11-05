@@ -10,11 +10,14 @@ import argparse
 import csv
 import hashlib
 import json
+import sys
 import time
 from pathlib import Path
 
 import numpy as np
 from sklearn.metrics import adjusted_rand_score, normalized_mutual_info_score
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from diarize.cluster import cluster_embeddings, merge_short_segments, smooth_labels
 from diarize.pipeline import (extract_embeddings_for_segments, merge_consecutive_segments,
