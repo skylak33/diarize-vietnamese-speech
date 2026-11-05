@@ -23,6 +23,7 @@ AHC/spectral clustering → RTTM. Архитектура ECAPA-TDNN сохран
   VoxConverse без leakage.
 - `docs/EMBEDDING_ERROR_ANALYSIS.md`: optional embedding/AHC/postprocessing diagnostics and PowerShell workflow.
 - `docs/CORRECTED_VIYT_DIAR_EVALUATION.md`: frozen corrected-encoder ViYT-Diar reproduction and its limitations.
+- `docs/SYNTHETIC_VIETNAMESE_DIARIZATION.md`: speaker-disjoint synthetic benchmark protocol and measured clean-speech results.
 - `tests/`: CPU unit tests на синтетических данных без скачивания датасетов.
 
 ## Установка
