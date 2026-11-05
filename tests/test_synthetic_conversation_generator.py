@@ -1,5 +1,6 @@
 import hashlib
 import json
+import random
 import wave
 from collections import Counter
 from pathlib import Path
@@ -8,6 +9,7 @@ import numpy as np
 import pytest
 import soundfile as sf
 
+from experiments import generate_synthetic_conversations as generator
 from experiments.generate_synthetic_conversations import (
     SourceReader,
     assign_source_split,
@@ -75,6 +77,17 @@ def test_official_and_speaker_hash_split_policies_are_deterministic():
     assert assign_source_split(row, 42) == assign_source_split(row, 42)
 
 
+def test_three_speaker_conversation_balances_available_source_datasets():
+    pools = {
+        "dnu::a": [{"dataset": "dnu_vispeech"}],
+        "vietnamese_asr::a": [{"dataset": "vietnamese_asr"}],
+        "viespeaker::a": [{"dataset": "viespeaker"}],
+    }
+    selected = generator._select_speakers(pools, 3, 1, random.Random(42))
+    assert {pools[speaker][0]["dataset"] for speaker in selected} == set(
+        ("dnu_vispeech", "vietnamese_asr", "viespeaker"))
+
+
 def test_source_reader_verifies_declared_dnu_checksum(tmp_path):
     path = tmp_path / "source.wav"
     digest = _wav(path, 3)
@@ -112,3 +125,21 @@ def test_tiny_clean_generation_writes_valid_wav_rttm_json(tmp_path):
         rttm = row["rttm_path"].read_text(encoding="utf-8").splitlines()
         assert rttm and all(line.startswith(f"SPEAKER {row['conversation_id']} 1 ") for line in rttm)
         assert all("<NA> <NA> dnu::" in line for line in rttm)
+
+
+def test_generation_drops_speaker_without_usable_speech_and_retries(tmp_path, monkeypatch):
+    original = generator._conversation
+    failed = {"value": False}
+
+    def fail_once(config, split, index, speaker_count, pools, rng, reader, vad):
+        if split == "development" and not failed["value"]:
+            failed["value"] = True
+            raise generator.UnusableSpeakerError("dnu::unusable")
+        return original(config, split, index, speaker_count, pools, rng, reader, vad)
+
+    monkeypatch.setattr(generator, "_conversation", fail_once)
+    result = generate(
+        load_config(CONFIG), _manifest(tmp_path), tmp_path / "generated-retry",
+        target_counts={"development": 1, "validation": 1, "holdout": 1},
+        speaker_counts=[1], vad=AllSpeechVad())
+    assert failed["value"] and result["counts"]["development"] == 1

@@ -21,6 +21,12 @@ GENERATOR_VERSION = "clean-v1"
 SPLITS = ("development", "validation", "holdout")
 
 
+class UnusableSpeakerError(ValueError):
+    def __init__(self, speaker_id):
+        self.speaker_id = speaker_id
+        super().__init__(f"No source with enough continuous speech for {speaker_id}")
+
+
 def _sha256_bytes(value):
     return hashlib.sha256(value).hexdigest()
 
@@ -184,14 +190,29 @@ def _pick_clip(speaker_rows, desired_samples, minimum_samples, reader, vad, curs
             start, end = max(eligible, key=lambda region: region[1] - region[0])
             samples = min(desired_samples, end - start)
             return np.asarray(audio[start:start + samples], dtype=np.float32), row, digest, index + 1
-    raise ValueError(f"No source with enough continuous speech for {speaker_rows[0]['speaker_id']}")
+    raise UnusableSpeakerError(speaker_rows[0]["speaker_id"])
+
+
+def _select_speakers(pools, speaker_count, conversation_index, rng):
+    by_dataset = defaultdict(list)
+    for speaker, rows in pools.items():
+        by_dataset[rows[0]["dataset"]].append(speaker)
+    datasets = [name for name in ("dnu_vispeech", "vietnamese_asr", "viespeaker")
+                if by_dataset[name]]
+    if not datasets or len(pools) < speaker_count:
+        raise ValueError(f"Only {len(pools)} usable speakers remain, needs {speaker_count}")
+    selected = []
+    for offset in range(speaker_count):
+        dataset = datasets[(conversation_index - 1 + offset) % len(datasets)]
+        candidates = sorted(set(by_dataset[dataset]) - set(selected))
+        if not candidates:
+            candidates = sorted(set(pools) - set(selected))
+        selected.append(rng.choice(candidates))
+    return selected
 
 
 def _conversation(config, split, index, speaker_count, pools, rng, reader, vad):
-    speakers = sorted(pools)
-    if len(speakers) < speaker_count:
-        raise ValueError(f"{split} has {len(speakers)} speakers, needs {speaker_count}")
-    selected = rng.sample(speakers, speaker_count)
+    selected = _select_speakers(pools, speaker_count, index, rng)
     minimum_turns = max(4, speaker_count * 2)
     order = []
     while len(order) < minimum_turns:
@@ -320,8 +341,13 @@ def generate(config, manifest_path, output_dir, target_counts=None, speaker_coun
         rng = random.Random(config["seed"] + 1009 * split_index)
         for index in range(1, target_counts[split] + 1):
             count = speaker_counts[(index - 1) % len(speaker_counts)]
-            audio, speakers, turns, silences = _conversation(
-                config, split, index, count, pools[split], rng, reader, vad)
+            while True:
+                try:
+                    audio, speakers, turns, silences = _conversation(
+                        config, split, index, count, pools[split], rng, reader, vad)
+                    break
+                except UnusableSpeakerError as error:
+                    pools[split].pop(error.speaker_id, None)
             records.append(_write_conversation(
                 output, split, index, audio, speakers, turns, silences,
                 config, config["seed"] + 1009 * split_index))
