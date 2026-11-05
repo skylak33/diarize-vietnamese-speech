@@ -111,6 +111,13 @@ single holdout run. Robust adaptive AHC does improve the holdout K=2 subgroup
 (18.5539% versus 3.2005%) and degrades K=4--5. On holdout paired comparisons
 across both modes, Robust improves 9 cases, worsens 60, and leaves 231 unchanged.
 
+Post-hoc development-only sensitivity runs used 25 balanced conversations for
+each additional seed. Fixed versus Robust DER was 4.6384% versus 9.8844%
+(clustering-only) and 5.0104% versus 6.0914% (full pipeline) for seed 123;
+for seed 2026 it was 4.5793% versus 6.7569% and 5.9528% versus 7.9372%.
+These small runs confirm the direction, but are not substitutes for full-size
+grouped resampling and were not used to alter the frozen selection.
+
 The worst holdout case is `holdout_000021`: Fixed returns one speaker with 0%
 DER, while Robust selects an apparent hierarchy-gap outlier and returns four
 clusters in clustering-only mode (58.70% DER) and seven final speakers in the
