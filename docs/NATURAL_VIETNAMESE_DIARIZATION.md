@@ -139,6 +139,97 @@ limitations analysis.
 | Full pipeline | 13.995 | 13.995 | 26.202 | 31.149 | 9.971 | 9.698 |
 | Clustering only | 12.274 | 12.171 | 26.950 | 26.135 | 9.407 | 8.869 |
 
+## Stage F findings and recommendation
+
+All eight natural recordings have two nominal channel speakers. The primary
+full-pipeline, overlap-included results show that DER and count accuracy do not
+move together:
+
+| Method | DER (%) | Count accuracy | Count MAE | ARI |
+|---|---:|---:|---:|---:|
+| Fixed AHC 0.65 | 13.995 | 0/8 | 4.500 | 0.829 |
+| Fixed AHC 0.75 | 13.995 | 0/8 | 4.375 | 0.829 |
+| Legacy adaptive AHC | 26.202 | 2/8 | 2.375 | 0.468 |
+| Robust adaptive AHC | 31.149 | 2/8 | 1.500 | 0.288 |
+| Spectral | 9.971 | 8/8 | 0.000 | 0.942 |
+| NME-SC | 9.698 | 8/8 | 0.000 | 0.968 |
+
+Fixed AHC fragments every recording, but its additional clusters are mostly
+speaker-pure. Robust adaptive AHC moves the count closer to two while merging
+speech from different reference speakers, increasing speaker error from 8.195
+to 25.350 percentage points. On `vi_000004`, Robust even returns the correct
+two clusters but reaches 46.445% DER, versus 15.316% for Fixed 0.75 with seven
+clusters. Correct count alone is therefore not a sufficient cut criterion.
+
+Paired recording bootstrap used 10,000 resamples with seed 42. Positive deltas
+below mean that Robust is worse than Fixed 0.75:
+
+| Condition | Robust - Fixed DER (pp) | 95% bootstrap interval | Improved / worse / unchanged recordings |
+|---|---:|---:|---:|
+| Full pipeline, overlap included | +17.155 | [+6.932, +25.842] | 1 / 6 / 1 |
+| Clustering only, overlap included | +13.966 | [+2.388, +25.246] | 2 / 4 / 2 |
+
+Fixed 0.75 and production 0.65 are effectively tied. Their full-pipeline
+hypotheses have identical DER on all eight recordings. In clustering-only,
+0.75 improves pooled DER by 0.104 points on one recording and is unchanged on
+seven; its 95% paired bootstrap interval is [-0.386, 0.000]. This is evidence
+that 0.75 remains suitable for further consideration, not evidence for a
+production default change.
+
+The natural and synthetic full-pipeline rankings differ substantially:
+
+| Method | Synthetic holdout DER / count accuracy | Natural silver DER / count accuracy |
+|---|---:|---:|
+| Fixed AHC 0.75 | 4.630 / 74.67% | 13.995 / 0% |
+| Legacy adaptive AHC | 6.887 / 66.67% | 26.202 / 25% |
+| Robust adaptive AHC | 8.609 / 61.33% | 31.149 / 25% |
+| Spectral | 8.511 / 65.33% | 9.971 / 100% |
+| NME-SC | 20.893 / 58.00% | 9.698 / 100% |
+
+The absolute values are not directly comparable: the synthetic holdout is
+clean and non-overlapping, while the natural reference is channel-VAD silver
+annotation with real overlap. The reversal for NME-SC, and the natural gain for
+spectral, demonstrate dataset sensitivity rather than justify selecting either
+method. Robust is worse than Fixed in both benchmarks, so its apparent K=2
+advantage does not survive assignment-quality scoring.
+
+Overlap exclusion reduces Fixed 0.75 full-pipeline DER from 13.995% to 10.280%
+and clustering-only DER from 12.169% to 8.243%. This roughly four-point gap is
+expected because the current hypothesis cannot emit simultaneous speakers.
+Remaining error is dominated by speaker assignment rather than VAD: all full
+pipeline methods share 5.439% Miss and 0.361% False Alarm in the primary
+condition.
+
+The recommendation is to keep production at 0.65 and not promote Robust,
+spectral, or NME-SC from this experiment. Fixed 0.75 should remain a candidate
+for a future threshold-selection study on a separately collected,
+human-reviewed natural development set. That set needs verified speaker
+identity separation and meaningful K=1 and K=3--5 coverage before a frozen
+test evaluation. No threshold tuning was performed on these eight recordings.
+
+Generated Stage F artifacts are in the ignored
+`results/natural_vietnamese_benchmark/full_evaluation/analysis/` directory:
+the paired bootstrap JSON, speaker-count confusion CSV, failure-case CSV, DER
+distribution plot, and Fixed-versus-Robust paired plot.
+
+Reproduce the frozen evaluation and analysis after acquisition and reference
+preparation with:
+
+```powershell
+python experiments/run_natural_vietnamese_benchmark.py `
+  --dataset datahive --device cuda `
+  --annotation-manifest results/natural_vietnamese_benchmark/datahive_references/annotation_manifest.jsonl `
+  --output-dir results/natural_vietnamese_benchmark/full_evaluation
+python experiments/analyze_natural_vietnamese_benchmark.py `
+  results/natural_vietnamese_benchmark/full_evaluation/recording_results.json
+```
+
+These conclusions remain limited by eight recordings, one source, K=2 only,
+unknown cross-recording speaker identity, automatic channel-VAD references,
+and no manual listening audit. The recording bootstrap quantifies sensitivity
+within this corpus; it cannot make those eight recordings representative of
+natural Vietnamese conversations generally.
+
 ## Repository audit
 
 The natural benchmark should extend the existing synthetic benchmark rather
@@ -323,11 +414,10 @@ fragmentation under a different reference process.
    conditions without changing clustering or the hypothesis.
 4. **Stage E -- evaluation (complete).** All eight eligible frozen-revision
    DataHive recordings were evaluated; generated artifacts remain outside Git.
-5. **Stage F -- analysis.** Produce dataset-stratified aggregates, paired
-   Fixed-versus-Robust deltas and confidence intervals, count confusion,
-   distributions, failure cases, and a natural-versus-synthetic limitations
-   table. Any optional threshold selection is a separately labeled experiment;
-   this corpus is currently too small to treat it as production validation.
+5. **Stage F -- analysis (complete).** Dataset-stratified aggregates, paired
+   confidence intervals, count confusion, distributions, failure cases, and
+   the natural-versus-synthetic comparison are recorded above. The corpus is
+   too small and narrow to use as production validation.
 
 The remaining seven DataHive files were approved and cached. The 1.027 GiB
 Humyn shard was not added to this frozen run, so its three potentially eligible
