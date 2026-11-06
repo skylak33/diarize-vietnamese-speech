@@ -13,6 +13,37 @@ production `0.65` or synthetic-benchmark `0.75`) is competitive with the four
 existing automatic-count alternatives on natural Vietnamese conversations.
 Initial results will not tune any threshold or change a production default.
 
+## Stage B acquisition
+
+Stage B added `experiments/acquire_natural_vietnamese_benchmark.py`. The CLI
+pins both repository revisions from the config, filters records before
+acquisition, uses the Hugging Face cache for resumable/reused files, compares
+downloaded size and SHA-256 with Hub LFS metadata, and writes a deterministic
+manifest under the ignored `results/` tree. It supports `--download`,
+`--metadata-only`, `--cache-dir`, `--offline`, `--dataset`, and
+`--max-recordings`.
+
+The metadata-only smoke inspected all configured metadata without downloading
+audio and found the expected 8 DataHive and 23 Humyn Vietnamese records. The
+download smoke used:
+
+```powershell
+python experiments\acquire_natural_vietnamese_benchmark.py `
+  --download --dataset datahive --max-recordings 1 `
+  --cache-dir D:\Downloads\natural-vietnamese-diarization\hf-cache `
+  --output results\natural_vietnamese_benchmark\datahive_smoke_manifest.json
+```
+
+`vi_000001.mp3` was the only downloaded audio file: 12,218,540 bytes, official
+LFS SHA-256
+`73db5cf99405944368beffdb8994033438e67c43dea5a649f2f5205ba0328c94`,
+48 kHz stereo MP3, and 763.584979 decoded seconds. The publisher metadata says
+763.632 seconds, a 0.047021 second difference that reference validation must
+allow for MP3 timing. Repeating the same command with `--offline` completed
+from cache without a network request. The Humyn 1.027 GiB shard was not
+downloaded; its 23 Vietnamese rows were inspected through non-audio Parquet
+columns only.
+
 ## Repository audit
 
 The natural benchmark should extend the existing synthetic benchmark rather
@@ -180,12 +211,12 @@ fragmentation under a different reference process.
 
 ## Implementation plan
 
-1. **Stage B -- acquisition.** Add one repository-convention CLI with
+1. **Stage B -- acquisition (complete).** The repository-convention CLI has
    `--download`, `--cache-dir`, `--offline`, `--dataset`, `--metadata-only`, and
-   `--max-recordings`. Pin revisions, use Hub caches/resume behavior, select the
-   eight DataHive paths and two Humyn shards, verify Hub/Xet metadata plus local
-   SHA-256, and run metadata-only and one bounded audio smoke test. Do not fetch
-   the Humyn 1.027 GiB shard without approval.
+   `--max-recordings`; it pins revisions, uses Hub cache/resume behavior,
+   selects the eight DataHive paths and two Humyn shards, verifies Hub/LFS
+   metadata plus local SHA-256, and passed metadata-only, download, and offline
+   smoke tests. The Humyn 1.027 GiB shard still requires approval.
 2. **Stage C -- references.** Add channel extraction, channel-VAD RTTM,
    strict Humyn timestamp parsing, provenance, exclusion and review manifests,
    and synthetic CI fixtures including overlap, corrupt audio, and malformed
@@ -202,6 +233,7 @@ fragmentation under a different reference process.
    table. Any optional threshold selection is a separately labeled experiment;
    this corpus is currently too small to treat it as production validation.
 
-Stage B is blocked on approval for the 189.637 MiB DataHive transfer and a
-decision whether the 1.027 GiB Humyn multi-speaker shard is worth its three
-eligible conversations. No result in this document is a DER measurement.
+Stage C requires approval to cache the remaining seven DataHive files
+(186,630,068 bytes, 177.984 MiB) and a separate decision whether the 1.027 GiB
+Humyn multi-speaker shard is worth its three eligible conversations. No result
+in this document is a DER measurement.
