@@ -112,8 +112,32 @@ distinct hypothesis RTTMs (six configurations by two modes), and 24 protocol
 rows after the two overlap conditions. Embedding hashes were identical across
 all six configurations within each mode, and included/excluded scoring reused
 the same hypothesis hash. The smoke metrics are integration evidence only and
-are not reported as a benchmark result. The eight-recording Stage E evaluation
-has not run.
+are not reported as a benchmark result.
+
+## Stage E full evaluation
+
+The frozen eight-recording DataHive evaluation completed on CUDA without
+exclusions. Its manifest records dataset revision
+`c29728a0c9792ba486807fa1ea9ca64e292cec01`, configuration SHA-256
+`0e006d5c23eed690d5ede5590b872460a3d2725f44a3809f002f07f1887addbb`, and
+the checkpoint hash above. It produced 192 per-recording protocol rows, 24
+aggregate rows, and 96 distinct hypothesis RTTMs under the ignored
+`results/natural_vietnamese_benchmark/full_evaluation/` directory.
+
+Post-run validation found no empty result cells. Every recording/mode pair had
+one embedding hash across all configurations, and each included/excluded
+overlap pair had one hypothesis hash. The generated `recording_results.csv`
+and JSON retain the full clustering traces and are therefore about 40 MiB and
+70 MiB respectively; they intentionally remain outside Git.
+
+The primary overlap-included micro-DER values below are frozen observations,
+not a model-selection result. Stage F supplies paired uncertainty and the
+limitations analysis.
+
+| Mode | Fixed 0.65 | Fixed 0.75 | Legacy adaptive | Robust adaptive | Spectral | NME-SC |
+|---|---:|---:|---:|---:|---:|---:|
+| Full pipeline | 13.995 | 13.995 | 26.202 | 31.149 | 9.971 | 9.698 |
+| Clustering only | 12.274 | 12.171 | 26.950 | 26.135 | 9.407 | 8.869 |
 
 ## Repository audit
 
@@ -297,16 +321,14 @@ fragmentation under a different reference process.
    prepared annotation manifest, includes Fixed AHC `0.65`, reuses each
    mode-specific frontend across all frozen methods, and scores both overlap
    conditions without changing clustering or the hypothesis.
-4. **Stage E -- evaluation.** Run only eligible frozen-revision recordings,
-   preserve all exclusions, measure the short/long runtime smoke before the
-   complete GPU run, and keep generated artifacts outside Git.
+4. **Stage E -- evaluation (complete).** All eight eligible frozen-revision
+   DataHive recordings were evaluated; generated artifacts remain outside Git.
 5. **Stage F -- analysis.** Produce dataset-stratified aggregates, paired
    Fixed-versus-Robust deltas and confidence intervals, count confusion,
    distributions, failure cases, and a natural-versus-synthetic limitations
    table. Any optional threshold selection is a separately labeled experiment;
    this corpus is currently too small to treat it as production validation.
 
-The remaining seven DataHive files were approved and cached. A separate
-decision is still required before downloading the 1.027 GiB Humyn shard for
-its three potentially eligible conversations. Stage E has not started, and no
-result in this document is a full-corpus DER measurement.
+The remaining seven DataHive files were approved and cached. The 1.027 GiB
+Humyn shard was not added to this frozen run, so its three potentially eligible
+conversations remain excluded and no cross-dataset aggregate is reported.
