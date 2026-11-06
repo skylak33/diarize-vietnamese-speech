@@ -84,6 +84,37 @@ remain excluded as `audio_shard_not_cached`: boundary validation requires the
 separately gated 1.027 GiB shard. No Humyn reference is claimed as eligible in
 Stage C.
 
+## Stage D benchmark integration
+
+Stage D added `experiments/run_natural_vietnamese_benchmark.py` as a thin
+natural-data adapter around the existing embedding extraction, clustering,
+production postprocessing, RTTM, partition metrics, and DER implementation.
+It reads the frozen configuration list directly from
+`configs/natural_vietnamese_benchmark.json`; there is no threshold-search CLI
+and no reference speaker count is passed to an automatic clustering method.
+
+For each recording the runner verifies the audio, reference, annotation
+manifest, configuration, checkpoint, and relevant code hashes. It then
+extracts embeddings once for each of the two declared modes and reuses them for
+all six clustering configurations. `clustering_only` uses the union of
+reference speech regions; `full_pipeline` uses the shared mono-mix Silero VAD
+settings. Each hypothesis is scored twice without regeneration: overlap
+`included` and overlap `excluded`, both with the configured 0.25-second collar.
+DER is pooled by reference speaker-seconds, while per-recording DER, component
+seconds, speaker counts, ARI/NMI, purity, fragmentation, runtime, embedding
+hashes, hypothesis hashes, and clustering traces remain available separately.
+
+A real one-recording CUDA smoke on `vi_000001` loaded the pinned checkpoint
+with SHA-256
+`58f3b402afa1de3c0a2543e845267146544be7ba74cad1a38cb4d26303afd325`.
+It produced 757 full-pipeline and 751 clustering-only embedding windows, 12
+distinct hypothesis RTTMs (six configurations by two modes), and 24 protocol
+rows after the two overlap conditions. Embedding hashes were identical across
+all six configurations within each mode, and included/excluded scoring reused
+the same hypothesis hash. The smoke metrics are integration evidence only and
+are not reported as a benchmark result. The eight-recording Stage E evaluation
+has not run.
+
 ## Repository audit
 
 The natural benchmark should extend the existing synthetic benchmark rather
@@ -262,9 +293,10 @@ fragmentation under a different reference process.
    deterministic review samples are implemented and covered by synthetic CI
    fixtures. All eight cached DataHive recordings are eligible; Humyn remains
    fail-closed without its audio shard.
-3. **Stage D -- benchmark.** Generalize the existing synthetic runner to the
-   prepared recording manifest, add Fixed AHC `0.65`, reuse frontend caches,
-   and score both overlap conditions without changing clustering.
+3. **Stage D -- benchmark (complete).** The natural runner consumes the
+   prepared annotation manifest, includes Fixed AHC `0.65`, reuses each
+   mode-specific frontend across all frozen methods, and scores both overlap
+   conditions without changing clustering or the hypothesis.
 4. **Stage E -- evaluation.** Run only eligible frozen-revision recordings,
    preserve all exclusions, measure the short/long runtime smoke before the
    complete GPU run, and keep generated artifacts outside Git.
@@ -276,5 +308,5 @@ fragmentation under a different reference process.
 
 The remaining seven DataHive files were approved and cached. A separate
 decision is still required before downloading the 1.027 GiB Humyn shard for
-its three potentially eligible conversations. Stage D has not started, and no
-result in this document is a DER measurement.
+its three potentially eligible conversations. Stage E has not started, and no
+result in this document is a full-corpus DER measurement.
