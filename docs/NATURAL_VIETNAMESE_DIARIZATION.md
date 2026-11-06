@@ -44,6 +44,46 @@ from cache without a network request. The Humyn 1.027 GiB shard was not
 downloaded; its 23 Vietnamese rows were inspected through non-audio Parquet
 columns only.
 
+## Stage C reference annotation
+
+Stage C added `experiments/prepare_natural_vietnamese_references.py`. DataHive
+audio is decoded without collapsing its two channels, Silero VAD is run on
+each channel independently, and the shared timeline is written to RTTM with
+stable `SPEAKER_00` (left/caller) and `SPEAKER_01` (right/callee) identifiers.
+Intervals from the two speakers are not partitioned or otherwise changed, so
+reference overlap remains present. The resulting provenance is explicitly
+`silver_reference`, never human ground truth.
+
+The complete pinned DataHive set was cached under
+`D:\Downloads\natural-vietnamese-diarization\hf-cache` and prepared with:
+
+```powershell
+python experiments\prepare_natural_vietnamese_references.py `
+  --dataset datahive `
+  --acquisition-manifest results\natural_vietnamese_benchmark\datahive_acquisition_manifest.json `
+  --output-dir results\natural_vietnamese_benchmark\datahive_references
+```
+
+All 8 recordings were eligible. Their 4,147 RTTM rows contain both expected
+speakers and 418.0 seconds of preserved two-speaker overlap. Channel speech
+totals sum to 7,094.685 seconds. The configured QC checks found no high
+cross-channel correlation, high-overlap ratio, severe participation imbalance,
+or leakage-RMS threshold violation. This is an automatic screen, not a manual
+quality judgment; the QC thresholds are heuristic review triggers, not tuned
+production cutoffs. The review manifest is deterministically seeded and has 435
+simultaneous-speech intervals of at least 0.5 seconds plus 40 ordinary
+non-overlap intervals. Its `human_verified` field remains `false`.
+
+The Humyn parser accepts only non-empty timestamped JSON lists, preserves
+cross-speaker overlap, assigns speaker IDs by first occurrence, and rejects
+malformed timestamps, invalid/missing speakers, duplicates, non-positive
+segments, and intervals outside decoded audio duration. The 20 Vietnamese
+plain-text records are excluded as `unsupported_annotation_format`. The three
+timestamped two-speaker records (`viet_1.wav`, `viet_2.wav`, and `viet_3.wav`)
+remain excluded as `audio_shard_not_cached`: boundary validation requires the
+separately gated 1.027 GiB shard. No Humyn reference is claimed as eligible in
+Stage C.
+
 ## Repository audit
 
 The natural benchmark should extend the existing synthetic benchmark rather
@@ -217,10 +257,11 @@ fragmentation under a different reference process.
    selects the eight DataHive paths and two Humyn shards, verifies Hub/LFS
    metadata plus local SHA-256, and passed metadata-only, download, and offline
    smoke tests. The Humyn 1.027 GiB shard still requires approval.
-2. **Stage C -- references.** Add channel extraction, channel-VAD RTTM,
-   strict Humyn timestamp parsing, provenance, exclusion and review manifests,
-   and synthetic CI fixtures including overlap, corrupt audio, and malformed
-   annotations.
+2. **Stage C -- references (complete for cached data).** Channel-VAD RTTM,
+   strict Humyn timestamp parsing, provenance, exclusion/QC manifests, and
+   deterministic review samples are implemented and covered by synthetic CI
+   fixtures. All eight cached DataHive recordings are eligible; Humyn remains
+   fail-closed without its audio shard.
 3. **Stage D -- benchmark.** Generalize the existing synthetic runner to the
    prepared recording manifest, add Fixed AHC `0.65`, reuse frontend caches,
    and score both overlap conditions without changing clustering.
@@ -233,7 +274,7 @@ fragmentation under a different reference process.
    table. Any optional threshold selection is a separately labeled experiment;
    this corpus is currently too small to treat it as production validation.
 
-Stage C requires approval to cache the remaining seven DataHive files
-(186,630,068 bytes, 177.984 MiB) and a separate decision whether the 1.027 GiB
-Humyn multi-speaker shard is worth its three eligible conversations. No result
-in this document is a DER measurement.
+The remaining seven DataHive files were approved and cached. A separate
+decision is still required before downloading the 1.027 GiB Humyn shard for
+its three potentially eligible conversations. Stage D has not started, and no
+result in this document is a DER measurement.
