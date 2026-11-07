@@ -41,6 +41,18 @@ An **incorrect cut** means that another cut in the same hierarchy exposes a usef
 
 Stability and correctness are independent: a stable partition can be consistently wrong. Report perturbation agreement separately from reference-dependent quality.
 
+## Verified saved-artifact evidence
+
+The completed DataHive manifest contains eight recordings at dataset revision `c29728a0c9792ba486807fa1ea9ca64e292cec01`. It records checkpoint SHA256 `58f3b402afa1de3c0a2543e845267146544be7ba74cad1a38cb4d26303afd325`, configuration SHA256 `0e006d5c23eed690d5ede5590b872460a3d2725f44a3809f002f07f1887addbb`, annotation-manifest SHA256 `723349f5dbe5993af655871417f9d881d0f64371c815764102dec5752a2ed03c`, both `full_pipeline` and `clustering_only` modes, and included/excluded-overlap scoring. The reference provenance is `silver_reference`.
+
+Saved stage-count evidence must be read by stage. On `vi_000004`, Robust AHC selected **initial K=4**, not K=2. Temporal postprocessing reduced the output to **final K=2**. The saved initial-clustering ARI is `0.0009618646`; it must not be described as the quality of the final two-speaker partition without a stage-aligned recomputation.
+
+The stability artifacts contain 16 recording/mode groups per method and perturbation family. Averaging the saved group summaries, Robust angular-noise runs changed K in `0.5069` of runs and had mean ARI `0.6678` against the unperturbed partition. Robust short-prefix runs changed K in `0.8438` of runs, with mean ARI `0.1440` and mean changed-assignment fraction `0.4288`. Fixed 0.65 had no angular-noise count changes and mean ARI `0.9004`, but its short-prefix count-change fraction was `0.9792`. These are stability measurements, not correctness rankings. The controlled `correct_k_wrong_partition` case gives K=2 with ARI `-0.5` for Fixed, Legacy, and Robust, directly demonstrating that correct count does not guarantee a correct partition.
+
+The saved silver-reference audit covers all eight DataHive recordings. Its fixed rules produced 432 simultaneous-activity intervals totaling 347.3 seconds, 438 suspicious intervals, and 1,586 high-confidence channel-separated windows. The review manifest contains 24 items and explicitly records `human_verified: false`; no suspicious interval is treated as a corrected label or proof of leakage.
+
+The cross-dataset comparison reads saved CSV/JSON only. It marks raw DER as non-comparable across corpora, compares Robust-versus-Fixed deltas only within a corpus, and leaves hierarchy failure types unavailable until integrated merge artifacts exist. ViYT-Diar supplies stage counts and SpeakerError only, so its partition evidence remains unavailable rather than inferred from a temporal-error proxy.
+
 ## No-tuning restrictions
 
 Do not retrain ECAPA, alter the checkpoint, VAD, embedding windows, production clustering defaults, or smoothing. Do not select thresholds, perturbation magnitudes, gap-margin rules, or high-confidence subsets based on which method wins on ViYT-Diar, DataHive, or the synthetic holdout. Do not download new datasets or silently rewrite references. Eight two-speaker DataHive conversations cannot establish generalization or support strong significance claims.
@@ -80,7 +92,15 @@ python experiments/audit_silver_reference.py
 python experiments/audit_silver_reference.py --write-excerpts
 ```
 
-The exact partition, hierarchy, stability, and comparison commands must be copied into `results/partition_quality_stability/provenance/` when their integrated CLIs are finalized. **Pending:** final CLI paths and effective arguments.
+Reproduce the saved-cache stability and cross-dataset summaries without audio inference:
+
+```powershell
+python experiments/analyze_clustering_stability.py
+python experiments/compare_partition_failure_mechanisms.py
+python -m pytest -q tests/test_clustering_stability.py tests/test_compare_partition_failure_mechanisms.py
+```
+
+The exact partition and hierarchy commands must be copied into `results/partition_quality_stability/provenance/` when their integrated CLIs are finalized. **Pending:** final CLI paths and effective arguments.
 
 ## Observation ledger
 
@@ -88,7 +108,7 @@ Complete one row per material observation. Never promote a hypothesis to a confi
 
 | ID | Dataset / recording | Method / configuration | Direct observation | Reference-dependent measurement | Hypothesized cause | Evidence artifact | Confidence | Status |
 |---|---|---|---|---|---|---|---|---|
-| OBS-001 | `vi_000004` | Fixed 0.75 vs Robust 0.75 | Pending | Pending | Pending | Pending | Pending | Pending |
+| OBS-001 | `vi_000004` | Robust 0.75 | Initial K=4; postprocessed final K=2 | Initial ARI=0.0009618646 | Pending hierarchy evidence | `full_evaluation/recording_results.csv` | High for saved values | Verified stage correction |
 | OBS-002 | Largest regression 2 | Pending | Pending | Pending | Pending | Pending | Pending | Pending |
 | OBS-003 | Largest regression 3 | Pending | Pending | Pending | Pending | Pending | Pending | Pending |
 | OBS-004 | Largest regression 4 | Pending | Pending | Pending | Pending | Pending | Pending | Pending |
@@ -98,9 +118,9 @@ Each final classification may contain multiple mechanisms: incorrect hierarchy c
 
 ## Pending results
 
-- **Baseline reproduction:** pending provenance verification.
+- **Baseline provenance:** saved DataHive manifest verified; independent rerun remains pending.
 - **Partition-quality comparison:** pending real-data artifacts.
 - **Cross-speaker merge frequency:** pending hierarchy traces.
-- **Perturbation and short-hierarchy stability:** pending experiments.
+- **Perturbation and short-hierarchy stability:** saved artifacts summarized above; correctness interpretation remains pending integrated partition/hierarchy evidence.
 - **DataHive manual listening:** pending; no human-verified labels are claimed.
 - **Cross-dataset interpretation and recommendation:** pending integrated evidence.
