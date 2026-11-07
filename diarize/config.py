@@ -11,7 +11,8 @@ DEFAULT_CONFIG = {
     'embedding': {'window_sec': 1.5, 'step_sec': 0.75, 'min_segment_sec': 0.5},
     'vad': {'threshold': 0.5, 'min_speech_ms': 250, 'min_silence_ms': 100,
             'speech_pad_ms': 30},
-    'clustering': {'method': 'ahc', 'threshold': 0.65, 'max_speakers': 10},
+    'clustering': {'method': 'ahc', 'count_estimator': 'backend_default',
+                   'threshold': 0.65, 'max_speakers': 10},
     'postprocessing': {'centroid_merge': {'enabled': False, 'similarity_threshold': 0.80,
                                           'max_small_cluster_size': 4,
                                           'similarity_margin': 0.05}},
@@ -65,6 +66,14 @@ def validate_config(config):
     clustering = config['clustering']
     if clustering['method'] not in {'ahc', 'spectral', 'nme_sc'}:
         raise ValueError('clustering.method must be ahc, spectral, or nme_sc')
+    if clustering['count_estimator'] not in {
+            'backend_default', 'adaptive_ahc', 'adaptive_ahc_robust'}:
+        raise ValueError(
+            'clustering.count_estimator must be backend_default, adaptive_ahc, '
+            'or adaptive_ahc_robust')
+    if (clustering['count_estimator'] in {'adaptive_ahc', 'adaptive_ahc_robust'}
+            and clustering['method'] != 'ahc'):
+        raise ValueError('adaptive AHC count estimation requires clustering.method=ahc')
     _number(clustering['threshold'], 'clustering.threshold', 0, 2)
     _integer(clustering['max_speakers'], 'clustering.max_speakers')
     merge = config['postprocessing']['centroid_merge']
@@ -106,7 +115,10 @@ def pipeline_kwargs(config):
     embedding, vad = config['embedding'], config['vad']
     clustering = config['clustering']
     merge = config['postprocessing']['centroid_merge']
-    return dict(method=clustering['method'], threshold=clustering['threshold'],
+    return dict(method=clustering['method'],
+                count_estimator=(None if clustering['count_estimator'] == 'backend_default'
+                                 else clustering['count_estimator']),
+                threshold=clustering['threshold'],
                 max_speakers=clustering['max_speakers'], window_sec=embedding['window_sec'],
                 step_sec=embedding['step_sec'], min_segment_sec=embedding['min_segment_sec'],
                 vad_threshold=vad['threshold'], vad_min_speech_ms=vad['min_speech_ms'],

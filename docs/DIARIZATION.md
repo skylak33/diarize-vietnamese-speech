@@ -21,6 +21,25 @@ second-best target. Rejected fragments keep their original assignments. The
 stage is skipped when `n_speakers` is supplied so it cannot violate an explicit
 speaker-count constraint.
 
+Adaptive AHC count estimation is also opt-in:
+
+```powershell
+python -m diarize.pipeline "data\audio\sample.wav" `
+  --model "exps\exp1\model\model_0034.model" `
+  --method ahc --count_estimator adaptive_ahc `
+  --output "results\adaptive\sample.rttm"
+```
+
+`adaptive_ahc` preserves the original gap rule. The separate
+`adaptive_ahc_robust` option uses a leave-one-out Tukey reference sample and
+rejects tied evidence. Both cut the already fitted AHC tree deterministically,
+report gap uncertainty fields, and fall back to the configured fixed threshold
+when the hierarchy has no decisive gap. The repository default remains
+fixed-threshold AHC. See
+[`SPEAKER_CLUSTERING_IMPROVEMENTS.md`](SPEAKER_CLUSTERING_IMPROVEMENTS.md) for
+the stopping rule and [`CLUSTERING_IMPROVEMENTS_V2.md`](CLUSTERING_IMPROVEMENTS_V2.md)
+for the reused-test v2 measurements and limitations.
+
 ## Inference
 
 The historical CLI remains valid:
@@ -68,6 +87,31 @@ python -m diarize.pipeline audio.wav \
   --method nme_sc --seed 42 --output results/audio.rttm
 ```
 
+NME-SC excludes self-similarity from informative graph neighbors. With fewer
+than eight embeddings, `floor(N/4)` does not provide two neighborhood sizes to
+auto-tune, so the backend deterministically uses the existing AHC fallback.
+Explicit speaker counts are preserved. This changes only NME-SC short-recording
+handling; AHC and the original spectral backend are unchanged.
+
+## Evaluation regions
+
+Without UEM, scoring retains the historical full-audio behavior. Use an
+author-provided UEM when the benchmark defines restricted evaluation regions:
+
+```powershell
+python -m eval.der `
+  --hyp_dir results/hypothesis `
+  --ref_dir data/reference `
+  --uem_dir data/official_uem `
+  --collar 0.25
+```
+
+UEM rows use `<recording-id> <channel> <start> <end>`. Multiple, adjacent, and
+overlapping rows are normalized per recording. Missing IDs, invalid timestamps,
+multiple channels, and intervals beyond known audio durations fail explicitly.
+Do not derive UEM from model errors. The ViYT-Diar protocol evidence and open
+questions are recorded in [`VIYT_EVALUATION_PROTOCOL.md`](VIYT_EVALUATION_PROTOCOL.md).
+
 ## YAML configuration
 
 `configs/diarization_default.yaml` is loadable with `--config`. Precedence is:
@@ -105,6 +149,10 @@ python -m experiments.run_diarization_experiments \
   --experiment ahc_threshold --device auto --seed 42
 ```
 
+Add `--uem_dir data/official_uem` only when that UEM is part of the benchmark
+protocol. The manifest records `full_audio` or `external_uem`, UEM paths and
+hashes, collar, and overlap handling.
+
 Supported series:
 
 - `ahc_threshold`: distances 0.65, 0.70, 0.75, 0.80;
@@ -113,6 +161,9 @@ Supported series:
 - `window`: window/step 1.5/0.75, 2.0/1.0, 3.0/1.5 seconds;
 - `vad_silence`: 100, 200, 300 ms;
 - `speaker_count`: oracle known count and automatic count;
+- `clustering_count`: fixed AHC, legacy adaptive AHC, robust adaptive AHC,
+  spectral and NME-SC under the same segmentation settings, all with automatic
+  count;
 - `clustering`: AHC, spectral with silhouette count selection, and NME-SC;
 - `vad_threshold` and `all` remain available.
 
@@ -137,6 +188,38 @@ hits. VAD or window changes always use a different cache entry.
 See [`DIARIZATION_ERROR_ANALYSIS.md`](DIARIZATION_ERROR_ANALYSIS.md) for the
 reference-coverage audit, SpeakerError count split, centroid rejection evidence,
 and the development-only AHC stability workflow.
+
+The optional embedding/pipeline diagnostic workflow is documented in
+[`EMBEDDING_ERROR_ANALYSIS.md`](EMBEDDING_ERROR_ANALYSIS.md). It records the
+actual AHC merge hierarchy, intermediate labels, reference-overlap classes,
+counterfactual postprocessing traces, and four reproducible plots. Diagnostic
+artifacts are provenance-bound and must not be used to tune production settings
+on the previously used ViYT-Diar test set.
+
+## Corrected-encoder frozen reproduction
+
+The checkpoint-compatible `Bottle2neck` order is
+`Conv1d -> ReLU -> BatchNorm1d`. With checkpoint SHA-256
+`58f3b402afa1de3c0a2543e845267146544be7ba74cad1a38cb4d26303afd325`
+and encoder-source SHA-256
+`96cd2147b769f3730d11eaabefedb3f3b52c3913f87f74d01b208d4bf92b14d8`,
+the frozen AHC 0.75/VAD 200 ms configuration evaluated exactly 100 recordings
+without failures. Every generated RTTM had the same SHA-256 as its preserved
+historical counterpart.
+
+Scoring used full audio, a 0.25-second collar, included overlap, and pooled
+component seconds. No UEM or oracle speaker count was used.
+
+| Reference mode | DER | Miss | FA | SpeakerError | Count accuracy | Count MAE | Over | Under |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Published reference | 15.1240 | 1.1813 | 4.9282 | 9.0144 | 0.60 | 0.65 | 0.26 | 0.14 |
+| Manual-audit sensitivity | 12.8687 | 1.7092 | 2.3043 | 8.8552 | 0.61 | 0.62 | 0.25 | 0.14 |
+
+The sensitivity row substitutes manually audited references only for
+`C4HFERLpRfI`, `Uaq5N3FbQb4`, and `ed0Vt0NxJUI`; the hypotheses are identical.
+Those broad reviewed turns may include pauses and are not an official ViYT-Diar
+reference. See [`CORRECTED_VIYT_DIAR_EVALUATION.md`](CORRECTED_VIYT_DIAR_EVALUATION.md)
+for provenance, commands, and diagnostic scope.
 
 ## ViYT-Diar exploratory measurements
 
@@ -201,6 +284,24 @@ SpeakerError 9.0144, count accuracy 0.60, and count MAE 0.65. Supplying the
 reference count as an oracle produced DER 13.0825, SpeakerError 6.9730, count
 accuracy 0.91, and count MAE 0.09. The oracle result is an upper-bound diagnostic
 and must never be reported as automatic performance.
+
+The validated paired values before display rounding are automatic DER
+`15.1239746592`, SpeakerError `9.0144201731`, and oracle-count DER
+`13.0825466601`, SpeakerError `6.9729921740`. Automatic RTTMs reproduced the
+frozen baseline for all 100 recordings. SpeakerError time changed from
+`399.252003` to `308.836402` seconds; 28 recordings improved, 10 worsened and 62
+were unchanged. Nine requested two-speaker recordings still lost one identity
+during postprocessing. These are reused-test diagnostics, not evidence for a
+production setting.
+
+### Smoothing counterfactual
+
+For `XJG-o9BK4To`, the trace changes from three initial clusters to one after
+temporal smoothing. Disabling smoothing does not improve the measured result:
+current smoothing gives DER `37.35515`, versus `37.78454` without smoothing.
+No smoothing change is promoted. This is a single-recording, reused-test
+diagnostic; the exact PowerShell workflow is in
+[`SPEAKER_CLUSTERING_IMPROVEMENTS.md`](SPEAKER_CLUSTERING_IMPROVEMENTS.md).
 
 ### Backend comparison
 

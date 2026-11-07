@@ -51,7 +51,7 @@ class Bottle2neck(nn.Module):
 
     def forward(self, x):
         residual = x
-        out = self.relu(self.bn1(self.conv1(x)))
+        out = self.bn1(self.relu(self.conv1(x)))
         spx = torch.split(out, self.width, 1)
         for i in range(self.nums):
             sp = spx[i] if i == 0 else sp + spx[i]

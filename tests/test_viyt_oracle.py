@@ -28,6 +28,8 @@ def test_automatic_unchanged_and_fixed_ahc_ignores_threshold(tmp_path, monkeypat
     assert automatic == pipeline.diarize('sample.wav', 'unused', encoder=object())
     assert automatic == 'SPEAKER sample 1 0.000 8.000 <NA> <NA> SPEAKER_00 <NA> <NA>'
     assert trace['n_clusters_before_postprocess'] == trace['n_speakers_after_postprocess'] == 1
+    assert trace['clustering']['ahc']['estimator'] == 'fixed_threshold'
+    assert trace['clustering_runtime_seconds'] >= 0
     outputs = []
     for threshold in (.01, .65, 1.5):
         trace = {}
@@ -45,6 +47,8 @@ def test_oracle_reports_cluster_lost_in_smoothing(monkeypatch):
     trace = {}
     pipeline.diarize('sample.wav', 'unused', encoder=object(), n_speakers=2, diagnostics=trace)
     assert trace['n_clusters_before_postprocess'] == 2
+    assert trace['n_clusters_after_smoothing'] == 1
+    assert trace['n_clusters_after_short_merge'] == 1
     assert trace['n_speakers_after_postprocess'] == 1
 
 

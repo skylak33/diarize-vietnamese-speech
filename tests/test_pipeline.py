@@ -84,6 +84,7 @@ def test_vad_min_silence_propagation_and_validation(monkeypatch):
 
 def test_embedding_cache_reuses_only_compatible_extraction(tmp_path, monkeypatch):
     audio_path=tmp_path/'sample.wav'; audio_path.write_bytes(b'fixture')
+    model_path=tmp_path/'model.pt'; model_path.write_bytes(b'checkpoint')
     calls={'extract':0}
     monkeypatch.setattr(pipeline,'load_audio',lambda _: (np.zeros(16000),16000))
     monkeypatch.setattr(pipeline,'get_speech_segments',lambda *args,**kwargs:[(0,1)])
@@ -91,14 +92,34 @@ def test_embedding_cache_reuses_only_compatible_extraction(tmp_path, monkeypatch
         calls['extract']+=1
         return [(0,1)],np.array([[1.,0.]])
     monkeypatch.setattr(pipeline,'extract_embeddings_for_segments',fake_extract)
-    cache={}; first={}; second={}; changed={}; encoder=object()
-    pipeline.diarize(str(audio_path),'unused',encoder=encoder,embedding_cache=cache,
-                     diagnostics=first)
-    pipeline.diarize(str(audio_path),'unused',encoder=encoder,embedding_cache=cache,
-                     diagnostics=second)
-    pipeline.diarize(str(audio_path),'unused',encoder=encoder,embedding_cache=cache,
-                     diagnostics=changed,vad_threshold=.6)
-    assert calls['extract']==2
+    cache={}; first={}; second={}; encoder=object()
+    first_output=pipeline.diarize(str(audio_path),str(model_path),encoder=encoder,
+                                  embedding_cache=cache,diagnostics=first)
+    second_output=pipeline.diarize(str(audio_path),str(model_path),encoder=encoder,
+                                   embedding_cache=cache,diagnostics=second)
+    assert first_output == second_output
     assert first['embedding_cache_hit'] is False
     assert second['embedding_cache_hit'] is True
-    assert changed['embedding_cache_hit'] is False
+
+    variants = [dict(vad_threshold=.6), dict(vad_min_silence_ms=200),
+                dict(window_sec=2), dict(min_segment_sec=.25)]
+    traces=[]
+    for options in variants:
+        trace={}; traces.append(trace)
+        pipeline.diarize(str(audio_path),str(model_path),encoder=encoder,
+                         embedding_cache=cache,diagnostics=trace,**options)
+    model_path.write_bytes(b'changed checkpoint')
+    model_trace={}; traces.append(model_trace)
+    pipeline.diarize(str(audio_path),str(model_path),encoder=encoder,
+                     embedding_cache=cache,diagnostics=model_trace)
+    encoder_source=tmp_path/'ecapa.py'; encoder_source.write_bytes(b'corrected source')
+    monkeypatch.setattr(pipeline,'ENCODER_SOURCE_PATH',encoder_source)
+    source_trace={}; traces.append(source_trace)
+    pipeline.diarize(str(audio_path),str(model_path),encoder=encoder,
+                     embedding_cache=cache,diagnostics=source_trace)
+    audio_path.write_bytes(b'changed audio fixture')
+    audio_trace={}; traces.append(audio_trace)
+    pipeline.diarize(str(audio_path),str(model_path),encoder=encoder,
+                     embedding_cache=cache,diagnostics=audio_trace)
+    assert calls['extract']==1+len(traces)
+    assert all(trace['embedding_cache_hit'] is False for trace in traces)

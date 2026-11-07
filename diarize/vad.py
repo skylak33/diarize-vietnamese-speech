@@ -2,6 +2,8 @@
 vad.py — Voice Activity Detection на основе silero-vad.
 """
 
+from functools import lru_cache
+
 import torch
 import numpy
 import soundfile
@@ -11,6 +13,13 @@ THRESHOLD         = 0.5     # порог уверенности VAD (0.0–1.0)
 MIN_SPEECH_MS     = 250     # минимальная длина речевого сегмента 
 MIN_SILENCE_MS    = 100     # минимальная пауза между сегментами 
 SPEECH_PAD_MS     = 30      # отступ вокруг каждого сегмента 
+
+
+@lru_cache(maxsize=1)
+def _load_silero_model():
+    from silero_vad import load_silero_vad
+
+    return load_silero_vad()
 
 
 def load_audio(path: str) -> tuple[numpy.ndarray, int]:
@@ -45,16 +54,49 @@ def get_speech_segments(
         raise ValueError("threshold must be between 0 and 1")
     if min_speech_ms <= 0 or min_silence_ms <= 0 or speech_pad_ms < 0:
         raise ValueError("VAD durations must be positive, with non-negative speech_pad_ms")
-    from silero_vad import load_silero_vad, get_speech_timestamps
-
-    model = load_silero_vad()
     audio, sr = load_audio(path)
+    return get_speech_segments_from_audio(
+        audio, sr, threshold, min_speech_ms, min_silence_ms,
+        speech_pad_ms, return_seconds)
+
+
+def get_speech_segments_from_audio(
+    audio: numpy.ndarray,
+    sample_rate: int,
+    threshold: float = THRESHOLD,
+    min_speech_ms: int = MIN_SPEECH_MS,
+    min_silence_ms: int = MIN_SILENCE_MS,
+    speech_pad_ms: int = SPEECH_PAD_MS,
+    return_seconds: bool = True,
+) -> list[tuple[float, float]]:
+    """Find speech in an already decoded mono waveform."""
+    if not 0 <= threshold <= 1:
+        raise ValueError("threshold must be between 0 and 1")
+    if min_speech_ms <= 0 or min_silence_ms <= 0 or speech_pad_ms < 0:
+        raise ValueError("VAD durations must be positive, with non-negative speech_pad_ms")
+    audio = numpy.asarray(audio, dtype="float32")
+    if audio.ndim != 1 or not len(audio) or not numpy.isfinite(audio).all():
+        raise ValueError("VAD audio must be a finite, non-empty mono waveform")
+    if not isinstance(sample_rate, int) or sample_rate <= 0:
+        raise ValueError("sample_rate must be a positive integer")
+    if sample_rate != SAMPLE_RATE:
+        import math
+        import scipy.signal as ssig
+
+        divisor = math.gcd(sample_rate, SAMPLE_RATE)
+        audio = ssig.resample_poly(
+            audio, SAMPLE_RATE // divisor, sample_rate // divisor).astype("float32")
+        sample_rate = SAMPLE_RATE
+
+    from silero_vad import get_speech_timestamps
+
+    model = _load_silero_model()
     audio_tensor = torch.from_numpy(audio)
 
     timestamps = get_speech_timestamps(
         audio_tensor,
         model,
-        sampling_rate    = sr,
+        sampling_rate    = sample_rate,
         threshold        = threshold,
         min_speech_duration_ms  = min_speech_ms,
         min_silence_duration_ms = min_silence_ms,

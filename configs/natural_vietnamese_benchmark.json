@@ -1,0 +1,104 @@
+{
+  "schema_version": 1,
+  "seed": 42,
+  "datasets": {
+    "datahive": {
+      "repo_id": "datahiveai/multilingual-conversations-sample",
+      "revision": "c29728a0c9792ba486807fa1ea9ca64e292cec01",
+      "license": "CC-BY-4.0",
+      "language_field": "language",
+      "language_value": "vi",
+      "metadata_path": "preview/metadata.jsonl",
+      "audio_pattern": "preview/vi_*.mp3",
+      "reference_provenance": "silver_reference"
+    },
+    "humyn": {
+      "repo_id": "humyn-labs/Asian-High-Fidelity-ASR-Dataset",
+      "revision": "9d640c7c6a94cd21641d0934591da7870e00c9b5",
+      "license": "CC-BY-4.0",
+      "language_field": "language",
+      "language_value": "Vietnamese",
+      "required_parquet_shards": [
+        "data/train-00000-of-00011.parquet",
+        "data/train-00010-of-00011.parquet"
+      ],
+      "reference_provenance": "transcript_derived_reference"
+    }
+  },
+  "checkpoint": {
+    "path": "exps/exp1/model/model_0034.model",
+    "sha256": "58f3b402afa1de3c0a2543e845267146544be7ba74cad1a38cb4d26303afd325"
+  },
+  "audio": {
+    "sample_rate_hz": 16000,
+    "hypothesis_channels": "mono_mix"
+  },
+  "vad": {
+    "threshold": 0.5,
+    "min_speech_ms": 250,
+    "min_silence_ms": 100,
+    "speech_pad_ms": 30
+  },
+  "quality_control": {
+    "silence_amplitude": 0.0001,
+    "clipping_amplitude": 0.999,
+    "suspicious_overlap_min_seconds": 0.5,
+    "high_overlap_ratio": 0.5,
+    "high_channel_correlation": 0.8,
+    "leakage_rms_ratio": 0.5,
+    "low_speech_balance_ratio": 0.1,
+    "ordinary_review_intervals_per_recording": 5
+  },
+  "embedding": {
+    "window_sec": 1.5,
+    "step_sec": 0.75,
+    "min_segment_sec": 0.5
+  },
+  "evaluation": {
+    "collar_seconds": 0.25,
+    "overlap_conditions": ["included", "excluded"],
+    "modes": ["full_pipeline", "clustering_only"],
+    "micro_average_der": true,
+    "bootstrap_seed": 42,
+    "bootstrap_replicates": 10000,
+    "bootstrap_unit": "recording"
+  },
+  "configurations": [
+    {
+      "name": "fixed_ahc_065",
+      "method": "ahc",
+      "count_estimator": null,
+      "threshold": 0.65
+    },
+    {
+      "name": "fixed_ahc_075",
+      "method": "ahc",
+      "count_estimator": null,
+      "threshold": 0.75
+    },
+    {
+      "name": "legacy_adaptive_ahc_075",
+      "method": "ahc",
+      "count_estimator": "adaptive_ahc",
+      "threshold": 0.75
+    },
+    {
+      "name": "robust_adaptive_ahc_075",
+      "method": "ahc",
+      "count_estimator": "adaptive_ahc_robust",
+      "threshold": 0.75
+    },
+    {
+      "name": "spectral",
+      "method": "spectral",
+      "count_estimator": null,
+      "threshold": 0.75
+    },
+    {
+      "name": "nme_sc",
+      "method": "nme_sc",
+      "count_estimator": null,
+      "threshold": 0.75
+    }
+  ]
+}

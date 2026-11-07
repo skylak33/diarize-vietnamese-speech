@@ -7,6 +7,8 @@ Methods:
     - NME-SC — auto-tuned spectral clustering using normalized maximum eigengap
 """
 
+import heapq
+
 import numpy
 from sklearn.cluster import AgglomerativeClustering, KMeans, SpectralClustering
 from sklearn.preprocessing import normalize
@@ -110,28 +112,161 @@ def cluster_ahc(
     embeddings: numpy.ndarray,
     n_speakers: int   = None,
     threshold: float  = 0.7,
-) -> numpy.ndarray:
+    return_diagnostics: bool = False,
+) -> numpy.ndarray | tuple[numpy.ndarray, dict]:
     """
     Агломеративная иерархическая кластеризация (AHC).
     """
     emb = normalize(embeddings, norm="l2")
 
+    options = dict(metric="cosine", linkage="average")
+    if return_diagnostics:
+        options.update(compute_distances=True, compute_full_tree=True)
     if n_speakers is not None:
-        model = AgglomerativeClustering(
-            n_clusters     = n_speakers,
-            metric         = "cosine",
-            linkage        = "average",
-        )
+        model = AgglomerativeClustering(n_clusters=n_speakers, **options)
     else:
         model = AgglomerativeClustering(
-            n_clusters        = None,
-            distance_threshold = threshold,
-            metric            = "cosine",
-            linkage           = "average",
-        )
+            n_clusters=None, distance_threshold=threshold, **options)
 
     labels = model.fit_predict(emb)
+    if not return_diagnostics:
+        return labels
+
+    sizes = {index: 1 for index in range(len(emb))}
+    merges = []
+    for step, ((left, right), distance) in enumerate(zip(model.children_, model.distances_)):
+        left, right = int(left), int(right)
+        merged_size = sizes[left] + sizes[right]
+        sizes[len(emb) + step] = merged_size
+        merges.append(dict(
+            merge_step=step,
+            left_cluster_id=left,
+            right_cluster_id=right,
+            merge_distance=float(distance),
+            merged_cluster_size=merged_size,
+        ))
+    diagnostics = dict(
+        metric="cosine",
+        linkage="average",
+        threshold=None if n_speakers is not None else float(threshold),
+        requested_n_speakers=n_speakers,
+        children=model.children_.astype(int).tolist(),
+        distances=model.distances_.astype(float).tolist(),
+        merges=merges,
+        labels=labels.astype(int).tolist(),
+        cluster_sizes=numpy.unique(labels, return_counts=True)[1].astype(int).tolist(),
+    )
+    return labels, diagnostics
+
+
+def _cut_ahc_hierarchy(children: list[list[int]], n_samples: int,
+                       n_clusters: int) -> numpy.ndarray:
+    """Cut an already fitted AHC tree into a deterministic flat partition."""
+    nodes = [-(n_samples + len(children) - 1)]
+    for _ in range(n_clusters - 1):
+        left, right = children[-nodes[0] - n_samples]
+        heapq.heappushpop(nodes, -left)
+        heapq.heappush(nodes, -right)
+
+    labels = numpy.empty(n_samples, dtype=int)
+    for label, node in enumerate(nodes):
+        descendants = [-node]
+        while descendants:
+            descendant = descendants.pop()
+            if descendant < n_samples:
+                labels[descendant] = label
+            else:
+                descendants.extend(children[descendant - n_samples])
     return labels
+
+
+def estimate_ahc_speaker_count(
+    distances: list[float] | numpy.ndarray,
+    n_samples: int,
+    max_speakers: int = 10,
+    fallback_threshold: float = 0.7,
+    robust: bool = False,
+) -> tuple[int, dict]:
+    """Estimate speaker count from an AHC hierarchy using an outlying merge gap.
+
+    Robust mode excludes the candidate gap from the Tukey reference sample so
+    a true outlier cannot inflate its own fence. Short hierarchies without
+    comparison evidence use the fixed AHC threshold fallback.
+    """
+    distances = numpy.asarray(distances, dtype=float)
+    if (n_samples < 1 or max_speakers < 1
+            or not numpy.isfinite(fallback_threshold) or fallback_threshold < 0):
+        raise ValueError("Invalid n_samples, max_speakers, or fallback_threshold")
+    if len(distances) != n_samples - 1:
+        raise ValueError("A complete AHC hierarchy must have n_samples - 1 distances")
+    if not numpy.isfinite(distances).all() or numpy.any(numpy.diff(distances) < -1e-12):
+        raise ValueError("AHC distances must be finite and nondecreasing")
+
+    candidates = []
+    for merge_index, gap in enumerate(numpy.diff(distances), start=1):
+        count = n_samples - merge_index
+        candidates.append(dict(
+            n_speakers=int(count),
+            gap=float(max(gap, 0.0)),
+            distance_before=float(distances[merge_index - 1]),
+            distance_after=float(distances[merge_index]),
+            eligible=2 <= count <= max_speakers,
+        ))
+    eligible = [candidate for candidate in candidates if candidate['eligible']]
+    selected = None
+    cutoff = None
+    best = (max(eligible,
+                key=lambda candidate: (candidate['gap'], -candidate['n_speakers']))
+            if eligible else None)
+    remaining = [] if best is None else [candidate['gap'] for candidate in eligible
+                                         if candidate is not best]
+    runner_up = max(remaining) if remaining else None
+    gap_margin = None if runner_up is None else best['gap'] - runner_up
+    if robust and (not eligible or not remaining):
+        selection_reason = 'insufficient_candidate_gaps'
+    elif robust:
+        q1, q3 = numpy.percentile(remaining, [25, 75])
+        cutoff = float(q3 + 1.5 * (q3 - q1))
+        if numpy.isclose(best['gap'], runner_up, rtol=1e-12, atol=1e-12):
+            selection_reason = 'no_unique_outlier'
+        elif best['gap'] > cutoff:
+            selected = best
+            selection_reason = 'outlying_gap'
+        else:
+            selection_reason = 'no_outlying_gap'
+    elif eligible:
+        gaps = numpy.asarray([candidate['gap'] for candidate in eligible])
+        q1, q3 = numpy.percentile(gaps, [25, 75])
+        cutoff = float(q3 + 1.5 * (q3 - q1))
+        flat_then_jump = float(gaps.min()) <= 1e-12 < best['gap']
+        if best['gap'] > cutoff or flat_then_jump:
+            selected = best
+            selection_reason = 'outlying_gap' if best['gap'] > cutoff else 'flat_then_jump'
+        else:
+            selection_reason = 'no_outlying_gap'
+    else:
+        selection_reason = 'insufficient_candidate_gaps'
+
+    fallback_count = min(max_speakers, n_samples - int(numpy.sum(distances < fallback_threshold)))
+    count = selected['n_speakers'] if selected else fallback_count
+    diagnostics = dict(
+        estimator='adaptive_ahc_robust' if robust else 'adaptive_ahc',
+        estimated_n_speakers=int(count),
+        max_speakers=int(max_speakers),
+        distances=distances.astype(float).tolist(),
+        gaps=candidates,
+        outlier_cutoff=cutoff,
+        selected_gap=None if selected is None else selected['gap'],
+        selection='outlying_gap' if selected is not None else 'fixed_threshold_fallback',
+        selection_reason=selection_reason,
+        eligible_gap_count=len(eligible),
+        best_gap=None if best is None else best['gap'],
+        runner_up_gap=runner_up,
+        gap_margin=gap_margin,
+        fallback_threshold=float(fallback_threshold),
+        fallback_n_speakers=int(fallback_count),
+    )
+    return int(count), diagnostics
 
 
 def cluster_spectral(
@@ -251,6 +386,8 @@ def cluster_embeddings(
     threshold: float  = 0.7,
     max_speakers: int = 10,
     seed: int = 42,
+    diagnostics: dict | None = None,
+    count_estimator: str | None = None,
 ) -> numpy.ndarray:
     """
     Кластеризация эмбеддингов говорящих.
@@ -258,6 +395,11 @@ def cluster_embeddings(
     embeddings = numpy.asarray(embeddings)
     if method not in {"ahc", "spectral", "nme_sc"} or max_speakers < 1:
         raise ValueError("Invalid method or max_speakers")
+    if count_estimator not in {None, "adaptive_ahc", "adaptive_ahc_robust"}:
+        raise ValueError(
+            "count_estimator must be None, 'adaptive_ahc', or 'adaptive_ahc_robust'")
+    if count_estimator is not None and (method != "ahc" or n_speakers is not None):
+        raise ValueError("count_estimator requires automatic AHC clustering")
     if n_speakers is not None and not 1 <= n_speakers <= len(embeddings):
         raise ValueError("n_speakers must be between 1 and number of embeddings")
     if len(embeddings) == 0:
@@ -266,19 +408,81 @@ def cluster_embeddings(
     if embeddings.ndim != 2 or not numpy.isfinite(embeddings).all() or (numpy.linalg.norm(embeddings, axis=1) == 0).any():
         raise ValueError("Embeddings must be finite nonzero vectors")
     if len(embeddings) == 1 or n_speakers == 1 or (n_speakers is None and max_speakers == 1):
-        return numpy.zeros(len(embeddings), dtype=int)
+        labels = numpy.zeros(len(embeddings), dtype=int)
+        if diagnostics is not None and method == "ahc":
+            if len(embeddings) == 1:
+                diagnostics['ahc'] = dict(
+                    metric="cosine", linkage="average",
+                    threshold=None if n_speakers == 1 or max_speakers == 1 else float(threshold),
+                    requested_n_speakers=n_speakers, children=[], distances=[], merges=[],
+                    labels=[0], cluster_sizes=[1])
+            else:
+                _, diagnostics['ahc'] = cluster_ahc(
+                    embeddings, n_speakers=1, return_diagnostics=True)
+            if count_estimator in {'adaptive_ahc', 'adaptive_ahc_robust'}:
+                _, estimator_diagnostics = estimate_ahc_speaker_count(
+                    diagnostics['ahc']['distances'], len(embeddings), max_speakers,
+                    fallback_threshold=threshold,
+                    robust=count_estimator == 'adaptive_ahc_robust')
+                diagnostics['ahc'].update(estimator_diagnostics)
+            else:
+                diagnostics['ahc'].update(
+                    estimator='known_count' if n_speakers == 1 else 'fixed_threshold',
+                    estimated_n_speakers=1,
+                )
+        return labels
     if n_speakers == len(embeddings):
-        return numpy.arange(len(embeddings))
+        labels = numpy.arange(len(embeddings))
+        if diagnostics is not None and method == "ahc":
+            _, diagnostics['ahc'] = cluster_ahc(
+                embeddings, n_speakers=n_speakers, return_diagnostics=True)
+            diagnostics['ahc']['labels'] = labels.tolist()
+            diagnostics['ahc'].update(estimator='known_count',
+                                      estimated_n_speakers=len(labels))
+        return labels
     if method in {"spectral", "nme_sc"} and n_speakers is None:
         # The spectral estimators need a one-speaker/small-sample fallback.
         gate = cluster_ahc(embeddings, threshold=threshold)
         if len(set(gate)) == 1 or len(embeddings) == 2:
             return gate
 
-    if method == "ahc":
-        labels = cluster_ahc(embeddings, n_speakers=n_speakers, threshold=threshold)
+    if method == "ahc" and count_estimator in {"adaptive_ahc", "adaptive_ahc_robust"}:
+        _, hierarchy = cluster_ahc(embeddings, n_speakers=1, return_diagnostics=True)
+        estimated, estimator_diagnostics = estimate_ahc_speaker_count(
+            hierarchy['distances'], len(embeddings), max_speakers,
+            fallback_threshold=threshold,
+            robust=count_estimator == 'adaptive_ahc_robust')
+        labels = _cut_ahc_hierarchy(hierarchy['children'], len(embeddings), estimated)
+        if diagnostics is not None:
+            diagnostics['ahc'] = hierarchy
+            diagnostics['ahc'].update(
+                threshold=None,
+                requested_n_speakers=estimated,
+                labels=labels.astype(int).tolist(),
+                cluster_sizes=numpy.unique(
+                    labels, return_counts=True)[1].astype(int).tolist(),
+            )
+            diagnostics['ahc'].update(estimator_diagnostics)
+    elif method == "ahc":
+        result = cluster_ahc(embeddings, n_speakers=n_speakers, threshold=threshold,
+                             return_diagnostics=diagnostics is not None)
+        if diagnostics is None:
+            labels = result
+        else:
+            labels, diagnostics['ahc'] = result
+            diagnostics['ahc'].update(
+                estimator='known_count' if n_speakers is not None else 'fixed_threshold',
+                estimated_n_speakers=len(set(labels)),
+            )
         if n_speakers is None and len(set(labels)) > max_speakers:
-            labels = cluster_ahc(embeddings, n_speakers=max_speakers)
+            if diagnostics is not None:
+                diagnostics['ahc_threshold'] = diagnostics['ahc']
+            result = cluster_ahc(embeddings, n_speakers=max_speakers,
+                                 return_diagnostics=diagnostics is not None)
+            if diagnostics is None:
+                labels = result
+            else:
+                labels, diagnostics['ahc'] = result
     elif method == "spectral":
         labels = cluster_spectral(embeddings, n_speakers=n_speakers, max_speakers=max_speakers, seed=seed)
     elif method == "nme_sc":
