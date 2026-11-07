@@ -1,504 +1,385 @@
-# ECAPA-TDNN — speaker diarization для вьетнамского языка
+# Vietnamese Speaker Diarization
 
-Исследовательский проект: audio → Silero VAD → ECAPA-TDNN embeddings →
-AHC/spectral clustering → RTTM. Архитектура ECAPA-TDNN сохранена.
-Обучение speaker recognition и оценка speaker diarization — разные этапы.
-Основная метрика диаризации — **corpus DER**.
+**Исследование диаризации вьетнамской речи на основе ECAPA-TDNN и алгоритмов кластеризации.**
 
-## Структура
+[![Python](https://img.shields.io/badge/Python-3.11%20%7C%203.12-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![Research](https://img.shields.io/badge/status-research-orange)](#текущий-статус)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE.md)
 
-- `models/`: ECAPA-TDNN и AAM-Softmax.
-- `train/`: обучение, Dolly/VLSP loaders, waveform augmentation.
-- `diarize/`: VAD, embeddings, clustering, постобработка и RTTM.
-- `eval/`: verification EER/minDCF, адаптеры данных, diarization DER.
-- `experiments/`: ablations, сравнение checkpoints, графики обучения.
-- `utils/`: metrics, audio decoding, model/device loading, seeds, provenance.
-- `configs/`: проверяемые YAML-конфигурации с приоритетом CLI → YAML → defaults.
-- `docs/DIARIZATION.md`: overclustering, режимы inference и воспроизводимые ablations.
-- `tests/`: CPU unit tests на синтетических данных без скачивания датасетов.
+> **Who spoke when?** Система определяет, **кто и когда говорил** в аудиозаписи, без предварительного знания числа участников. Проект также предоставляет инструменты исследования эмбеддингов говорящих, сравнения алгоритмов кластеризации и воспроизводимой оценки качества на вьетнамских речевых корпусах.
 
-## Установка
+**Навигация:** [Возможности](#возможности) · [Быстрый старт](#быстрый-старт) · [Методы](#методы-кластеризации) · [Результаты](#результаты-экспериментов) · [Воспроизведение](#воспроизведение-исследований) · [Ограничения](#ограничения-и-научная-корректность) · [Документация](#документация)
 
-Рекомендуется Python 3.11/3.12. Установите **согласованные версии torch и torchaudio**
-для CPU или своей версии CUDA, затем зависимости:
+## Задача и архитектура
 
-```bash
-python -m venv .venv
-source .venv/bin/activate
-# Windows PowerShell: .venv\Scripts\Activate.ps1
-pip install -r requirements-dev.txt
-python -m pytest -q
-```
-
-GitHub Actions запускает тот же CPU test suite на Python 3.11. Workflow не скачивает
-Git LFS checkpoints и не обращается к Kaggle/Hugging Face: CI проверяет логику на
-синтетических fixtures, а реальные corpus/GPU прогоны остаются отдельным этапом.
-
-На Kaggle сначала проверьте уже установленные torch/torchaudio; не заменяйте CUDA-сборку
-на CPU-сборку. `--device auto` выбирает CUDA при наличии, иначе CPU;
-`--device cuda` при отсутствии CUDA выдаёт ошибку. Обучение автоматически включает
-DataParallel только при выбранном CUDA и нескольких GPU (в том числе двух T4).
-Inference/evaluation используют одну GPU или CPU.
-
-## Данные и защита от leakage
-
-В существующем коде найдены:
-
-- Dolly training: `dolly-vn/dolly-audio-1000h-vietnamese`, parquet `data/train-*.parquet`,
-  колонка `audio`, speaker ID `voice_id` или `speaker_id`.
-- VLSP training: локальная metadata, **speaker ID + TAB + относительный путь**.
-  Старые Kaggle defaults сохранены в `train/loader_vlsp.py`, но пути можно задавать через CLI.
-- VLSP 2021 Public Test и официальный trials-файл **не входят в репозиторий**.
-  В предоставленном Kaggle notebook (ячейка 14) найдены пути и формат Public Test;
-  команда приведена ниже. Сам trials-файл локально отсутствует. Train metadata
-  не используется как test; адаптер требует явного файла/каталога.
-
-Старый EER-скрипт оценивал train-шарды Dolly, переименованные в `test`.
-Прежние числа EER из README нельзя подтвердить как результаты VLSP Public Test:
-таблица удалена до повторного измерения по проверенному протоколу.
-
-### VLSP Public Test: пути из вашего Kaggle notebook
-
-В `notebook030f0a2c0a(1).ipynb`, ячейка 14 (индекс с нуля), используется
-`public_test_pairs_with_label.txt`: **без заголовка, `wav1,wav2,label` через запятую**.
-Для этого формата добавлен `--trials_format vlsp`; расширение `.txt` сохраняется.
-Запускайте из корня обновлённого репозитория, где есть `eval/eer.py`:
-
-```bash
-python eval/eer.py --model_path exps/exp1/model/model_0034.model \
-  --dataset vlsp --trials_format vlsp \
-  --trials /kaggle/input/datasets/dungnasa10/vietnamese-speaker-verification/data/data/metadata/test/labels/public_test_pairs_with_label.txt \
-  --audio_root /kaggle/input/datasets/dungnasa10/vietnamese-speaker-verification/data/data/test/sv_vlsp_2021/public_test/competition_public_test \
-  --split public_test --seed 42 --device auto --output results/vlsp_public_test.json
-```
-
-Пути взяты из кода ноутбука, их существование в текущей Kaggle-сессии нужно проверить.
-В notebook сохранён вывод старого `evalECAPAModel.py` для 152 speakers/10 shards;
-отдельная VLSP-ячейка не содержит сохранённого результата. Это не подтверждает
-прежние значения EER как VLSP Public Test. Новый scorer обрабатывает весь trials-файл
-и останавливается при ошибке вместо `except ...: pass` из notebook.
-
-Notebook копирует только корневые `*.py` старой плоской версии проекта и переключает
-loaders редактированием импортов. Для обновлённой версии нужен **весь репозиторий**
-с `models/`, `train/`, `eval/`, `diarize/`, `utils/`, `experiments/`;
-используйте `train/run.py --dataset dolly|vlsp` и отдельные `save_path` для стадий.
-Скрипт проверки GPU и training output в notebook подтверждают использование двух T4
-старым кодом; новая версия на двух T4 пока не проверялась. Ячейка удаления старых
-checkpoints мешает сравнению эпох: не запускайте её до сохранения нужных моделей.
-
-### Локальные verification данные
-
-Предпочтителен **полный официальный trials protocol** с известными бинарными метками.
-Поддерживаются текстовые строки `label utterance1 utterance2`, либо
-`utterance1 utterance2 label` с `--trials_order label_last`, либо CSV
-с заголовком `label,utterance1,utterance2`. Метки: `1`/`target` и `0`/`nontarget`.
-Без manifest идентификаторы являются путями относительно `--audio_root`.
-Если официальный формат иной (например, отдельные enrollment/test/key-файлы), сначала
-сделайте явное преобразование в этот интерфейс **с сохранением всех trials и меток**;
-это интерфейс проекта, а не утверждение о формате VLSP.
-
-Если официальных trials нет, подготовьте CSV manifest с заголовком:
+Диаризация (*speaker diarization*) разбивает запись на временные интервалы и назначает каждому интервалу идентификатор говорящего. В отличие от **speaker verification** (проверки, принадлежат ли два речевых фрагмента одному человеку), здесь необходимо восстановить последовательность говорящих на протяжении записи.
 
 ```text
-utterance_id,path,speaker_id,split
+                    ┌────────────────────┐
+Audio (WAV / audio) ─▶│ Silero VAD         │  обнаружение речи
+                    └─────────┬──────────┘
+                              ▼
+                    ┌────────────────────┐
+                    │ Sliding windows    │  сегменты речи
+                    └─────────┬──────────┘
+                              ▼
+                    ┌────────────────────┐
+                    │ ECAPA-TDNN         │  speaker embeddings
+                    └─────────┬──────────┘
+                              ▼
+                    ┌────────────────────┐
+                    │ Clustering         │  AHC / Spectral / NME-SC
+                    └─────────┬──────────┘
+                              ▼
+                    ┌────────────────────┐
+                    │ Temporal processing│  согласование меток во времени
+                    └─────────┬──────────┘
+                              ▼
+                        RTTM + diagnostics
 ```
 
-Укажите реальные строки из metadata, `path` относительно `--audio_root` (либо каталога
-manifest), `split`: `test`, `public_test`, `validation`, `dev` или `train`.
-Для evaluation `train` недопустим. Если manifest содержит train, пересечение speakers
-или путей с evaluation вызывает ошибку. Trials вместе с manifest обязаны ссылаться
-только на выбранный split; их метки проверяются по speaker IDs.
+Модель **ECAPA-TDNN** извлекает векторные представления речевых фрагментов; кластеризация группирует представления одного предполагаемого говорящего. Метки кластеров не содержат реальных имён или идентичностей людей.
 
-Для Dolly без официального test split необходим **заранее выделенный speaker-disjoint
-held-out набор** и список исключённых speakers для training (`--exclude_speakers`, один ID
-в строке). Если модель уже обучалась на этих speakers, такой результат нельзя выдавать
-за оценку на невиденных говорящих: нужно переобучение с исключением held-out speakers.
-Один только manifest не доказывает отсутствие leakage в старых checkpoints.
+## Возможности
 
-## Обучение
+- **Inference:** диаризация отдельных аудиозаписей, экспорт в стандартный формат **RTTM**, автоматический или заранее заданный подсчёт говорящих.
+- **Кластеризация:** fixed-threshold AHC, spectral clustering, NME-SC, экспериментальные `adaptive_ahc` и `adaptive_ahc_robust`.
+- **Обучение:** скрипты для ECAPA-TDNN, AAM-Softmax, Dolly/VLSP, опциональной аугментации и fine-tuning.
+- **Оценка:** DER (Miss / False Alarm / Speaker Error), EER и minDCF; отдельная оценка ошибок количества говорящих.
+- **Исследования:** синтетические разговоры с известными говорящими, естественные разговоры с *silver* разметкой, анализ качества разбиений (ARI, NMI, purity), иерархии AHC и устойчивости к возмущениям.
+- **Воспроизводимость:** зафиксированный checkpoint, проверка SHA-256, разделение выборок, provenance manifests, совместимые кэши эмбеддингов и regression-тесты.
 
-Предобучение Dolly:
+## Текущий статус
+
+**Это исследовательский проект, а не готовый production-сервис.** Основной рабочий режим — AHC с фиксированным порогом **cosine distance `0.65`**. Новые методы изучаются отдельно и **не заменяют значения по умолчанию** без независимого обоснования.
+
+Состояние на **7 ноября 2026 года**:
+
+- Исправлена и проверена совместимость архитектуры ECAPA-TDNN с сохранённым checkpoint: порядок операций в `Bottle2neck` — `Conv1d → ReLU → BatchNorm1d`.
+- Воспроизведены исторические результаты на всех **100 записях ViYT-Diar**, включая совпадение SHA-256 всех 100 RTTM.
+- Проведён отдельный **синтетический benchmark на 600 разговорах** (`300 / 150 / 150` для development / validation / holdout).
+- Проведён benchmark на **8 естественных вьетнамских разговорах DataHive** с автоматически построенной двухканальной *silver reference*.
+- Добавлены диагностики ошибки выбора среза иерархии, преждевременных объединений говорящих, устойчивости кластеров и последующей обработки меток.
+- **Robust Adaptive AHC остаётся экспериментальным:** улучшение на ранее использованном ViYT-Diar не подтвердилось как устойчивое превосходство на независимых синтетических и естественных данных.
+
+## Быстрый старт
+
+### 1. Установка
+
+Требуется **Python 3.11 или 3.12**. Для GPU предварительно установите совместимые версии `torch` и `torchaudio` для вашей CUDA; для CPU — соответствующие CPU-сборки.
 
 ```bash
-python train/run.py --dataset dolly --n_class 152 --save_path exps/dolly \
-  --num_frames 200 --batch_size 256 --n_cpu 0 --max_epoch 80 \
-  --device auto --seed 42 --augmentation none
+git clone https://github.com/skylak33/diarize-vietnamese-speech.git
+cd diarize-vietnamese-speech
+
+python -m venv .venv
+source .venv/bin/activate  # Linux / macOS
+# .venv\Scripts\Activate.ps1  # Windows PowerShell
+
+python -m pip install -r requirements.txt
 ```
 
-VLSP finetuning без редактирования импортов:
+Для запуска тестов дополнительно установите `requirements-dev.txt`. Опция `--device auto` выбирает CUDA при доступности, иначе CPU.
 
-```bash
-python train/run.py --dataset vlsp --n_class 1015 --save_path exps/vlsp \
-  --initial_model exps/exp1/model/model_0034.model \
-  --metadata_path /path/to/training_metadata.txt --audio_base /path/to/audio_root \
-  --num_frames 200 --batch_size 256 --n_cpu 0 --max_epoch 80 \
-  --device auto --seed 42 --augmentation none
+**Модель:** основной checkpoint находится в репозитории по пути `exps/exp1/model/model_0034.model` (~60 MiB). Проверка SHA-256:
+
+```text
+58f3b402afa1de3c0a2543e845267146544be7ba74cad1a38cb4d26303afd325
 ```
 
-`--initial_model` переносит encoder, оставляя новый AAM classifier: соответствие
-индексов классов между датасетами не предполагается. Используйте отдельный `save_path`
-для каждой стадии. Без `--initial_model` загружаются последние веса из `save_path`;
-**optimizer state не сохраняется**, поэтому это weight-only continuation, не побитовый
-resume. Для Dolly рядом с checkpoint сохраняется `.speakers.json`; старый checkpoint
-без mapping можно использовать для encoder transfer, но не безопасного восстановления
-классификатора. Промежуточный checkpoint внутри эпохи также не является полным resume.
-
-`score.txt` содержит loss, accuracy и LR каждой эпохи; `run_config.json` — аргументы.
-Loaders используют `num_workers=0` для стабильного порядка, `--n_cpu` сохранён для
-совместимости. Dolly сохраняет prefetch/decode threads, но результаты потребляются
-в порядке подачи. Ошибки данных останавливают запуск, а не меняют корпус молча.
-
-### Augmentation
+### 2. Диаризация аудио
 
 ```bash
-python train/run.py --dataset vlsp --n_class 1015 --save_path exps/vlsp_aug \
-  --metadata_path /path/to/training_metadata.txt --audio_base /path/to/audio_root \
-  --augmentation full --musan_path /path/to/musan --rir_path /path/to/rirs \
-  --device auto --seed 42
+python -m diarize.pipeline path/to/audio.wav \
+  --model exps/exp1/model/model_0034.model \
+  --method ahc \
+  --device auto \
+  --output results/audio.rttm
 ```
 
-- `none`: без waveform augmentation и без SpecAugment.
-- `noise`: additive noise, music или babble (3–8 речевых сигналов), плюс clean branch.
-- `rir`: нормированная по энергии RIR convolution либо clean branch.
-- `full`: выбор clean/noise/music/babble/RIR. SpecAugment включён для noise/rir/full.
-- Если параметр не указан, waveform режим выводится из MUSAN/RIR путей;
-  прежнее поведение SpecAugment сохраняется.
+Результат — файл `RTTM`, содержащий временные границы и метки предполагаемых говорящих. Пример фрагмента формата (иллюстрация, не результат конкретной записи):
 
-Под MUSAN должны быть каталоги `noise/`, `music/`, `speech/` с WAV любой глубины;
-RIR WAV ищутся рекурсивно. SNR: noise 0–15 dB, music 5–15 dB, babble 13–20 dB.
-Аудио приводится к mono 16 kHz; Windows paths поддерживаются. Недостающие ресурсы
-для явно выбранного режима вызывают ошибку. Evaluation не использует augmentation.
-
-## Диаризация
-
-```bash
-python diarize/pipeline.py audio.wav --model exps/exp1/model/model_0034.model \
-  --method ahc --threshold 0.65 --vad_threshold 0.5 \
-  --window_sec 1.5 --step_sec 0.75 --device auto --seed 42 --output results/audio.rttm
-
-python diarize/pipeline.py audio.wav --model exps/exp1/model/model_0034.model \
-  --method spectral --n_speakers 2 --output results/audio.rttm
-
-python diarize/pipeline.py audio.wav --model exps/exp1/model/model_0034.model \
-  --config configs/diarization_default.yaml --centroid_merge \
-  --centroid_similarity_threshold 0.80 --output results/audio.rttm
+```text
+SPEAKER audio 1 0.50 2.30 <NA> <NA> SPEAKER_00 <NA> <NA>
+SPEAKER audio 1 3.10 1.70 <NA> <NA> SPEAKER_01 <NA> <NA>
 ```
 
-Старые позиционные аргументы и defaults window=1.5, step=0.75 сохранены.
-Число speakers автоматически оценивается без `--n_speakers`; максимум по умолчанию 10.
-Порог AHC — **cosine distance**, меньший порог обычно даёт больше кластеров.
-Перекрывающиеся embedding windows разделяются по серединам центров, чтобы не создавать
-ложную одновременную речь. Этот pipeline выдаёт одну метку на момент времени и не имеет
-отдельного overlap detector. Тишина не заполняется при слиянии соседних сегментов.
-При отсутствии речи сохраняется пустой RTTM.
-
-## Evaluation
-
-### Измеренный DER на ViYT-Diar (2026-11-02)
-
-После исправления ECAPA проверены обе эпохи на всех 100 записях ViYT-Diar test
-(104.32 минуты), revision `c66b118709d68c7538408d086232d850356db374`.
-Автоматическое число спикеров, AHC threshold=0.65, окна 1.5/0.75 с,
-VAD=0.5, collar=0.25 с, overlap учитывается, seed=42; RTX 5060 Laptop GPU.
-
-| Checkpoint | Corpus DER | Miss | False alarm | Speaker confusion | Speaker Count Accuracy |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| model_0034 | **17.6331%** | 1.6532% | 4.5967% | 11.3831% | 32% |
-| model_0082 | 24.4620% | 1.6532% | 4.5967% | 18.2120% | 19% |
-
-34-я эпоха лучше на 6.8289 п.п. DER при этих фиксированных настройках.
-Метрики повторно проверены по сохранённым RTTM; test-порог не подбирался.
-[Полный отчёт, manifest и результаты](results/viyt_der_20261102/REPORT.md).
-
-### Исправление совместимости `model_0034` с ECAPA (2026-11-02)
-
-В `Bottle2neck.forward` восстановлен порядок `Conv → ReLU → BatchNorm`, как в
-[исходной реализации](https://github.com/TaoRuijie/ECAPA-TDNN/blob/main/model.py).
-Ранее здесь было `Conv → BatchNorm → ReLU`. Формы параметров совпадают, поэтому
-даже `strict=True` не обнаруживал это расхождение. Оно затрагивало все три Res2-блока.
-На локальном `model_0034` разные синтетические тоны давали cosine 0.99987–0.99993
-со старым кодом и 0.86580–0.94874 с исходной архитектурой. Это диагностика,
-**не новый результат VLSP** и не доказательство качества распознавания речи.
-
-После предоставления локального VLSP выполнены два полных прогона на RTX 5060 Laptop
-GPU: одинаковые веса `model_0034`, 20 000 trials (10 000/10 000), 2 921 WAV, seed=42,
-full-utterance cosine scoring. Хеши модели и протокола совпали.
-
-| Порядок в Bottle2neck | EER | minDCF | EER threshold |
-| --- | ---: | ---: | ---: |
-| Старый: Conv → BatchNorm → ReLU | 27.16% | 0.9663 | 0.998203754 |
-| Исправленный: Conv → ReLU → BatchNorm | **9.07%** | **0.4958** | 0.438422143 |
-
-EER снизился на 18.09 процентного пункта (66.61% относительно старого результата),
-без переобучения. Старые EER и threshold воспроизвелись; minDCF исходного Kaggle
-запуска был 0.9665, локального — 0.9663. Причина этой небольшой разницы отдельно
-не исследовалась. Артефакты и команды: [отчёт](results/vlsp_order_fix_20261102/REPORT.md).
-
-Для повторной оценки импортируйте `kaggle/ECAPA_Kaggle.ipynb` в Kaggle и выполните
-Run All в новой сессии с прежними datasets. По умолчанию выбран `model_0034.model`.
-Notebook исправляет только известную строку в рабочей копии code dataset, поэтому
-старый подключённый dataset можно оставить. Результат пишется в отдельный
-`results/vlsp_public_test_model_0034_relu_bn.json`, включая SHA256 кода encoder.
-Протокол, веса, full-utterance cosine scoring и seed сохраняются; выводится разница
-с предоставленными пользователем EER=27.16% и minDCF=0.9665. Хеши прежнего запуска
-не предоставлены, поэтому его полная воспроизводимость пока не подтверждена.
-
-Если checkpoint обучался именно с ошибочным порядком, исправленная архитектура
-не гарантирует совместимость по поведению: проверьте исходный training code.
-Не выбирайте новые гиперпараметры по Public Test; для этого нужен отдельный dev split.
-
-### Speaker verification evaluation: EER и minDCF
-
-Сначала задайте реальные файлы Public Test:
+Если количество говорящих известно **из внешних условий**, его можно указать явно:
 
 ```bash
-python eval/eer.py --model_path exps/exp1/model/model_0034.model \
-  --dataset vlsp --trials /path/to/public_test_trials.txt \
-  --audio_root /path/to/public_test_audio --n_pairs 20000 --seed 42 \
-  --device auto --output results/vlsp_eer.json
+python -m diarize.pipeline path/to/audio.wav \
+  --model exps/exp1/model/model_0034.model \
+  --method spectral --n_speakers 2 \
+  --output results/audio.rttm
 ```
 
-При trials-файле `n_pairs` игнорируется: оценивается **весь** протокол.
-Для короткой команды можно задать `VLSP_TRIALS` и `VLSP_AUDIO_ROOT` в окружении:
+Использовать истинное количество говорящих **из тестовой разметки** допустимо только для отдельно обозначенного *oracle experiment*, но не для оценки полностью автоматического режима.
+
+### 3. Настройка
+
+Параметры по умолчанию заданы в [`configs/diarization_default.yaml`](configs/diarization_default.yaml):
+
+| Параметр | По умолчанию | Назначение |
+|---|---:|---|
+| `clustering.method` | `ahc` | Метод кластеризации |
+| `clustering.threshold` | `0.65` | Порог **cosine distance** для AHC |
+| `clustering.max_speakers` | `10` | Максимальное число говорящих |
+| `embedding.window_sec` | `1.5` | Длина окна эмбеддинга, с |
+| `embedding.step_sec` | `0.75` | Шаг окна, с |
+| `vad.threshold` | `0.5` | Порог VAD |
+| `vad.min_silence_ms` | `100` | Минимальная пауза, мс |
+| `postprocessing.centroid_merge.enabled` | `false` | Дополнительное объединение кластеров |
+| `evaluation.collar` | `0.25` | Допуск при DER, с |
 
 ```bash
-python eval/eer.py --model_path exps/exp1/model/model_0034.model --dataset vlsp --n_pairs 20000 --seed 42
+python -m diarize.pipeline path/to/audio.wav \
+  --model exps/exp1/model/model_0034.model \
+  --config configs/diarization_default.yaml \
+  --threshold 0.75 \
+  --output results/audio.rttm
 ```
 
-Без trials, на явно подготовленном held-out manifest:
+Приоритет: **явный аргумент CLI > YAML > встроенное значение**. Для AHC увеличение `--threshold` обычно разрешает больше объединений и уменьшает число кластеров. Порог `centroid_similarity_threshold` имеет другую семантику (**cosine similarity**): больший порог делает объединение строже.
+
+## Методы кластеризации
+
+| Метод | Число говорящих | Статус |
+|---|---|---|
+| **Fixed AHC** | Определяется порогом cosine distance | **Основной режим** |
+| **Spectral** | Заданное `K` или автоматическая оценка | Реализован, сравнивается в экспериментах |
+| **NME-SC** | Автоматическая оценка по спектральной структуре | Реализован, включая обработку коротких записей |
+| **Legacy Adaptive AHC** | Выбор среза иерархии по gap-эвристике | Экспериментальный |
+| **Robust Adaptive AHC** | Leave-one-out Tukey-критерий для наибольшего gap с fallback | **Экспериментальный, opt-in** |
+
+Запуск Robust Adaptive AHC:
 
 ```bash
-python eval/eer.py --model_path exps/exp1/model/model_0034.model \
-  --dataset dolly --manifest data/dolly_eval.csv --audio_root data/dolly \
-  --n_pairs 20000 --seed 42 --output results/dolly_eer.json
+python -m diarize.pipeline path/to/audio.wav \
+  --model exps/exp1/model/model_0034.model \
+  --method ahc --threshold 0.75 \
+  --count_estimator adaptive_ahc_robust \
+  --output results/audio_robust.rttm
 ```
 
-Поддерживаются `VLSP_EVAL_MANIFEST`, `DOLLY_EVAL_MANIFEST`, `DOLLY_TRIALS`,
-`DOLLY_AUDIO_ROOT`. Для VLSP manifest при необходимости задайте `--split public_test`.
-Без локальных файлов Dolly adapter проверяет реальные HF splits и предпочитает test;
-если test/выбранного evaluation split нет, выдаёт ошибку. Train fallback отсутствует.
-`--max_utterances` ограничивает streaming evaluation; для публикации указывайте его
-и HF revision. `--n_shards` теперь выдаёт объяснение, почему прежний протокол небезопасен.
+**Идея Robust Adaptive AHC:** построить полную иерархию average-linkage AHC, проанализировать последовательность расстояний слияния и выбрать разрез при статистически выделяющемся максимальном gap. Для расчёта Tukey-порога кандидат исключается из эталонной выборки; неоднозначность и отсутствие выраженного gap приводят к fallback на фиксированный порог. Метод **не использует истинные speaker labels при inference**.
 
-Pairs генерируются с фиксированным seed, примерно 50/50, равномерно по speakers,
-**с возвращением** (повторные пары допустимы; это не 20000 независимых наблюдений).
-Positive pair никогда не состоит из одного utterance дважды. Embeddings кешируются
-на время evaluation, audio resampling общий с pipeline. Ошибки trials не пропускаются.
+**Важно:** корректное предсказание `K` не означает корректного назначения фрагментов говорящим. Иерархия может необратимо объединить разных людей ещё до выбора разреза. Поэтому оценка включает **DER и качество разбиения**, а не только count accuracy.
 
-Сравнение checkpoints (каждый второй **файл в порядке эпох**, начиная с первого):
+## Оценка качества
+
+В проекте используются **разные метрики для разных задач**:
+
+| Задача | Метрики | Что измеряют |
+|---|---|---|
+| Speaker diarization | **DER**, Miss, False Alarm, Speaker Error | Ошибки активности речи и назначения говорящих |
+| Speaker count | Accuracy, MAE, overcount / undercount | Ошибку числа говорящих |
+| Speaker partition | ARI, NMI, purity, fragmentation | Качество группировки фрагментов |
+| Speaker verification | EER, minDCF | Различимость пар «один / разные говорящие» |
+
+DER считается как отношение суммарного времени ошибок к суммарному времени референсной речи. **Corpus DER агрегирует секунды ошибок по всему корпусу, а не усредняет DER отдельных записей.** Для описанных ниже экспериментов используется collar **0.25 с**; overlap входит в основной подсчёт, если явно не указано иное.
+
+### DER для одной записи или корпуса
 
 ```bash
-python experiments/eval_checkpoints.py --model_dir exps/exp1/model --dataset vlsp \
-  --trials /path/to/public_test_trials.txt --audio_root /path/to/public_test_audio \
-  --every 2 --seed 42 --output results/eer_by_epoch.csv
+python -m eval.der \
+  --hyp results/audio.rttm \
+  --ref path/to/reference.rttm
+
+python -m eval.der \
+  --hyp_dir results/hypothesis_rttm \
+  --ref_dir path/to/reference_rttm \
+  --collar 0.25 \
+  --output results/der.json \
+  --csv results/der.csv
 ```
 
-CSV: `epoch,EER,minDCF`. Соседний JSON содержит checkpoints, hash протокола,
-метаданные и версии. Все checkpoints оцениваются на одних trials.
+Если официальный протокол требует ограниченную область оценки, можно передать `--uem` или `--uem_dir`. `--skip_overlap` **изменяет протокол** и должен указываться явно.
 
-### Speaker diarization evaluation: DER
+### EER / minDCF для speaker verification
 
 ```bash
-python eval/der.py --hyp results/audio.rttm --ref data/reference/audio.rttm
-python eval/der.py --hyp_dir results/rttm --ref_dir data/reference_rttm \
-  --collar 0.25 --output results/der_results.json --csv results/der_results.csv
-python eval/der.py --audio audio.wav --model exps/exp1/model/model_0034.model --ref reference.rttm
+python -m eval.eer \
+  --model_path exps/exp1/model/model_0034.model \
+  --dataset vlsp \
+  --trials path/to/public_test_trials.txt \
+  --trials_format vlsp \
+  --audio_root path/to/public_test_audio \
+  --device auto \
+  --output results/vlsp_verification.json
 ```
 
-Основной и единственный production scorer — `pyannote.metrics.DiarizationErrorRate`.
-Некорректный `compute_der_simple` и `--simple` удалены. `--skip_overlap` исключает
-overlap reference из scoring; по умолчанию overlap учитывается.
+Полный заданный trials-протокол оценивается без случайного сокращения. **EER не равен точности определения говорящих и не заменяет DER.** Исторические значения EER, измеренные до исправления порядка операций ECAPA, нельзя автоматически относить к текущей модели: для корректного сравнения необходимо повторное evaluation с совместимой архитектурой и тем же протоколом.
 
-RTTM ID внутри строк должен совпадать с audio stem. При directory evaluation RTTM
-читаются рекурсивно; дублирующиеся IDs и неизвестные hypothesis IDs — ошибки.
-Отсутствующая гипотеза считается пустой, включая полностью пустой hypothesis directory.
-Пустой reference RTTM в директории обозначает silence recording с ID = stem файла.
-Многоканальные записи нужно оценивать отдельно.
+## Результаты экспериментов
 
-Corpus rates получаются из **суммы секунд компонентов / суммы reference speaker-seconds**,
-а не среднего файловых процентов. `duration` — scoring reference speech после collar/
-overlap exclusions; overlap может давать несколько speaker-seconds на одну секунду.
-Без аудио/UEM scoring region: от 0 до максимального конца reference/hypothesis.
-Runner знает длительности аудио и оценивает полные записи. Для неполной разметки
-подготовьте полностью размеченную evaluation область; частичный RTTM не задаёт UEM.
-Нулевой знаменатель отображается как `undefined`/JSON `null`, FA seconds сохраняются.
+**Ниже приведены измеренные результаты из отчётов проекта, а не прогнозы.** Эти корпуса и протоколы различаются; их абсолютные DER **нельзя напрямую сравнивать между собой**. Меньше DER — лучше.
 
-### Ablation
+### 1. ViYT-Diar — воспроизведение и exploratory analysis
+
+**100 записей**, полный аудиосигнал, collar 0.25 с, overlap включён. Результаты получены на уже неоднократно исследованной тестовой выборке.
+
+| Автоматический метод | DER ↓ | Count accuracy ↑ |
+|---|---:|---:|
+| Fixed AHC 0.75 | **15.124%** | 60% |
+| Legacy Adaptive AHC | 13.770% | 68% |
+| Robust Adaptive AHC | **13.013%** | **71%** |
+| Spectral | 16.649% | 65% |
+| NME-SC | 19.956% | 46% |
+
+Внутри этой **исследовательской** серии Robust показывает лучший DER. Однако ViYT-Diar **не является независимым holdout для выбора гиперпараметров**. Исторический fixed-AHC baseline был воспроизведён для 100/100 RTTM
+
+### 2. Синтетический вьетнамский benchmark — отдельный holdout
+
+Создано **600 чистых разговоров из реальных вьетнамских речевых фрагментов**: 300 development, 150 validation, 150 holdout. Длительность одного разговора — **30–45 с**, число говорящих — **1–5**, без добавленного шума и overlap. Идентификаторы говорящих, исходные фрагменты и хеши декодированного контента разделены между выборками. Сегменты речи для reference автоматически уточнялись VAD, поэтому это **не полностью вручную размеченный корпус**.
+
+**Holdout, full pipeline (Silero VAD → ECAPA → clustering → postprocessing):**
+
+| Автоматический метод | DER ↓ | Count accuracy ↑ |
+|---|---:|---:|
+| **Fixed AHC 0.75** | **4.630%** | **74.67%** |
+| Legacy Adaptive AHC | 6.887% | 66.67% |
+| Robust Adaptive AHC | 8.609% | 61.33% |
+| Spectral | 8.511% | 65.33% |
+| NME-SC | 20.893% | 58.00% |
+
+**Вывод:** на этом независимом синтетическом holdout фиксированный AHC работает лучше адаптивных вариантов. Robust может улучшать частный случай с двумя говорящими, но склонен дробить односпикерные записи и ошибаться при большем `K`.
+
+### 3. Natural DataHive — естественные разговоры с silver reference
+
+**8 двухканальных записей**, для которых эталонные интервалы получены независимым Silero VAD для левого и правого канала. В ref сохранено пересечение речи двух участников; проверенная человеком ground truth **отсутствует**. Все восемь записей номинально содержат двух говорящих.
+
+**Full pipeline, overlap included:**
+
+| Автоматический метод | DER ↓ | Count accuracy ↑ | ARI ↑ |
+|---|---:|---:|---:|
+| Fixed AHC 0.65 | 13.995% | 0/8 | 0.829 |
+| Fixed AHC 0.75 | 13.995% | 0/8 | 0.829 |
+| Legacy Adaptive AHC | 26.202% | 2/8 | 0.468 |
+| Robust Adaptive AHC | 31.149% | 2/8 | 0.288 |
+| Spectral | 9.971% | 8/8 | 0.942 |
+| NME-SC | **9.698%** | **8/8** | **0.968** |
+
+На этом небольшом корпусе **spectral / NME-SC** оказываются лучше по DER, чем fixed AHC. При этом меньшая ошибка подсчёта у Robust **не приводит** к лучшему разбиению или меньшему DER. Эти результаты не обосновывают смену production default: **всего 8 записей, только `K=2`, silver reference**. 
+### Что показывают эксперименты
+
+1. **Нельзя выбирать метод только по speaker-count accuracy:** правильно угаданное количество не гарантирует правильную кластеризацию.
+2. **Качество зависит от типа данных:** порядок методов на чистой синтетике и естественных двухканальных разговорах существенно различается.
+3. **Robust Adaptive AHC не готов к использованию по умолчанию:** положительный результат на повторно использованном ViYT-Diar не обобщается на два других исследованных сценария.
+4. **Ошибки нужно локализовать по этапам:** качество эмбеддингов, необратимые объединения AHC, выбор разреза и temporal postprocessing могут ухудшать итог независимо друг от друга.
+
+## Воспроизведение исследований
+
+### Синтетический benchmark
+
+Генератор использует **локально подготовленные** источники VIVOS / VieSpeaker / DNU-ViSpeech. Данные не загружаются автоматически. Сначала настройте пути в source manifest и проверьте доступность файлов.
 
 ```bash
-python experiments/run_diarization_experiments.py \
-  --audio_dir data/diarization/audio --ref_rttm_dir data/diarization/rttm \
-  --model exps/exp1/model/model_0034.model --output_dir experiments/results/clustering \
-  --experiment clustering --seed 42
+python experiments/audit_local_speaker_datasets.py \
+  --vietnamese-asr /path/to/vietnamese_asr \
+  --viespeaker /path/to/VieSpeaker-Dataset-opus \
+  --dnu-vispeech /path/to/DNU-ViSpeech
+
+python experiments/generate_synthetic_conversations.py --dry-run
+python experiments/generate_synthetic_conversations.py
+
+python experiments/run_synthetic_diarization_benchmark.py \
+  --conversation-json results/synthetic_vietnamese_benchmark/generated \
+  --model exps/exp1/model/model_0034.model \
+  --split development --device auto \
+  --output-dir results/synthetic_vietnamese_benchmark/experiments/development
+
+python experiments/analyze_synthetic_benchmark.py \
+  results/synthetic_vietnamese_benchmark/experiments/development/recording_results.json
 ```
 
-Выбор `--experiment`:
+**Правильный порядок исследования:** выбрать конфигурацию на development → зафиксировать её → проверить на validation → однократно использовать holdout. Не подбирать параметры по holdout.
 
-- `clustering`: AHC/spectral/NME-SC.
-- `ahc_threshold`: 0.65, 0.70, 0.75, 0.80; AHC automatic count.
-- `centroid_merge`: AHC only и post-merge с cosine similarity 0.75, 0.80, 0.85.
-- `vad_threshold`: 0.3, 0.4, 0.5, 0.6, 0.7.
-- `vad_silence`: 100, 200, 300 ms.
-- `window`: 1.5/0.75, 2.0/1.0, 3.0/1.5 s (window/step).
-- `speaker_count`: known/automatic.
-- `all`: объединение этих **однофакторных** серий с удалением дубликатов, не декартово произведение.
+### Natural DataHive
 
-`--dry_run` выводит план без запуска; `--max_configs 32` ограничивает его размер.
-Baseline выбирается через `--method`, `--threshold`, `--vad_threshold`, `--window_sec`,
-`--speaker_mode`. Step по умолчанию window/2; `--step_sec` фиксирует его явно.
-Для каждой серии используйте новый output directory. Encoder загружается один раз.
-Сохраняются config, RTTM, DER JSON, per-file CSV, общий `results.csv` и manifest
-с seed, версиями, git revision и SHA256 модели/audio/reference.
-
-Общий CSV содержит:
-`method,ahc_threshold,vad_threshold,vad_min_silence_ms,window_sec,step_sec,`
-`speaker_mode,centroid_merge,DER,Miss,FalseAlarm,SpeakerError,`
-`SpeakerCountAccuracy,SpeakerCountMAE,OverclusteringRate,UnderclusteringRate,`
-`AveragePredictedSpeakers,AverageReferenceSpeakers,ElapsedSeconds,`
-`PeakPythonMemoryMB,config_id`.
-Per-file CSV/JSON: `N_ref,N_pred,abs_error,exact_match` плюс DER/components.
-Accuracy — доля точных совпадений (0–1), MAE — средняя абсолютная ошибка числа speakers.
-`N_pred` измеряется по окончательному RTTM; smoothing может уменьшить число меток даже
-при заданном числе кластеров. Если known count больше числа embeddings, запуск выдаёт
-явную ошибку: такая запись не пропускается и count не подменяется.
-
-Полное описание различий AHC distance и centroid cosine similarity, YAML precedence,
-диагностик и команд ViYT-Diar находится в [`docs/DIARIZATION.md`](docs/DIARIZATION.md).
-
-### Plots
+Требует доступа к соответствующему датасету, свободного места для кэша и соблюдения лицензии источника. Скрипты сохраняют manifest, исходные ревизии и хеши.
 
 ```bash
-python experiments/plot_training.py --log exps/exp1/score.txt --output_dir results
-python experiments/plot_training.py --log exps/exp1/score.txt \
-  --eer_csv results/eer_by_epoch.csv --output_dir results
+python experiments/acquire_natural_vietnamese_benchmark.py \
+  --dataset datahive --download \
+  --output results/natural_vietnamese_benchmark/datahive_acquisition_manifest.json
+
+python experiments/prepare_natural_vietnamese_references.py \
+  --dataset datahive \
+  --acquisition-manifest results/natural_vietnamese_benchmark/datahive_acquisition_manifest.json \
+  --output-dir results/natural_vietnamese_benchmark/datahive_references
+
+python experiments/run_natural_vietnamese_benchmark.py \
+  --dataset datahive --device auto \
+  --annotation-manifest results/natural_vietnamese_benchmark/datahive_references/annotation_manifest.jsonl \
+  --output-dir results/natural_vietnamese_benchmark/full_evaluation
+
+python experiments/analyze_natural_vietnamese_benchmark.py \
+  results/natural_vietnamese_benchmark/full_evaluation/recording_results.json
 ```
 
-Файлы: `training_loss.png`, `training_accuracy.png`, `training_lr.png`,
-опционально `eer_by_epoch.png`. Для повторяющихся epochs в append-log используется
-последняя запись. Не смешивайте разные стадии обучения в одном графике без пояснения.
-
-## Experimental protocol
-
-**Verification:** cosine similarity между L2-normalized ECAPA embeddings. EER — точка
-равенства false rejection и false acceptance, линейно интерполированная на ROC с
-группировкой одинаковых scores. Выводимый Threshold — ближайшая эмпирическая рабочая
-точка, не обещание точного равенства ошибок на конечной выборке.
-minDCF минимизирует `C_miss * P_miss * P_target + C_fa * P_fa * (1-P_target)` и
-нормируется на `min(C_miss*P_target, C_fa*(1-P_target))`. Defaults: P_target=0.05,
-оба cost=1; доступны CLI overrides. Порог minDCF отдельно записывается в JSON.
-Это явно заданная настройка проекта, а не утверждение о конкретном VLSP cost protocol.
-См. [NIST evaluation plan](https://www.nist.gov/system/files/documents/2021/07/12/2021_SRE_Evaluation_Plan_V5.pdf).
-
-**Diarization:** `DER = (Miss seconds + False Alarm seconds + Confusion seconds) /
-reference speaker-seconds`. Miss — пропущенная речь, FA — лишняя речь,
-Confusion — неверный speaker после оптимального взаимно-однозначного сопоставления
-меток в записи. Компоненты и DER в CSV выражены в процентах. Collar передаётся
-непосредственно в pyannote: `0.25` — исключаемая окрестность общей ширины 0.25 s
-вокруг каждой reference границы (по 0.125 s с каждой стороны).
-См. [pyannote reference](https://pyannote.github.io/pyannote-metrics/reference.html).
-
-Known count — oracle-условие с числом speakers из reference; automatic count — реальное
-предсказание pipeline. Их результаты сообщаются отдельно. AHC использует average linkage
-по cosine distance; spectral использует clipped cosine affinity и silhouette selection
-для k=2..max_speakers. Для одного speaker и слишком коротких записей применяется
-AHC gate с тем же threshold; это эвристика, а не обученный count estimator.
-Spectral сам по себе не восстанавливает overlapping speech.
-
-Выбирайте thresholds/window/checkpoint на **development** corpus, а итоговую оценку
-проводите один раз на независимом test. При ablations на Public Test результаты следует
-обозначать как exploratory, не как независимую финальную оценку. Не объединяйте DER
-диаризации и EER верификации в одну метрику. Указывайте train data/stage, test protocol,
-collar, overlap policy, count mode, seed и версии для каждой таблицы.
-[Описание VLSP 2021](https://vlsp.org.vn/node/123) различает условия использования
-обучающих данных; Dolly pretraining нужно явно указывать при сопоставлении с challenge.
-
-`set_seed` задаёт random/numpy/torch/CUDA seeds и deterministic algorithms.
-Повторяемость предполагает одинаковые данные, порядок, версии и оборудование;
-побитовое совпадение между CPU, одной GPU и DataParallel не гарантируется.
-Для публикации сохраните `pip freeze`, git diff/commit, конфиги и evaluation manifests.
-Реальные DER/EER в этом README не приводятся: сначала выполните команды выше.
-
-### Smoke checks
-
-Без внешних данных и GPU можно проверить CLI, notebook и локальные checkpoints:
+### Диагностика ошибок кластеризации
 
 ```bash
+python experiments/cache_natural_diagnostic_embeddings.py --device auto
+python experiments/analyze_ahc_merge_quality.py
+python experiments/analyze_clustering_stability.py
+python experiments/compare_partition_failure_mechanisms.py
+```
+
+Анализ различает:
+
+- **count error** — ошибочное число кластеров;
+- **partition error** — неправильное объединение эмбеддингов даже при верном `K`;
+- **wrong cut** — выбор неудачного уровня уже построенной иерархии;
+- **early cross-speaker merge** — необратимое объединение разных говорящих;
+- **postprocessing effect** — изменение числа и назначения меток при сглаживании.
+
+Reference speaker IDs используются **только после inference** для диагностики. *Oracle cut* показывает потенциальные свойства уже построенной иерархии, но не является автоматическим алгоритмом.
+
+## Структура репозитория
+
+```text
+.
+├── configs/          # YAML/JSON конфигурации и протоколы benchmark
+├── diarize/          # VAD, embeddings, clustering, RTTM, pipeline
+├── eval/             # DER / EER / minDCF
+├── experiments/      # runners, data preparation и диагностика
+├── models/           # ECAPA-TDNN и loss
+├── train/            # обучение, fine-tuning, загрузчики данных
+├── utils/            # аудио, модели, метрики, seed, provenance
+├── tests/            # unit / integration / regression tests
+├── docs/             # научные протоколы и отчёты
+├── kaggle/           # исследовательские ноутбуки
+├── exps/             # сохранённые checkpoints
+└── audit/            # локальные эталоны и результаты ручного аудита
+```
+
+Выходные артефакты исследований записываются в `results/` (игнорируется Git): RTTM, JSON/CSV, manifests, кэши эмбеддингов и диагностические графики. Их отсутствие в Git **не означает**, что результаты можно воспроизвести без исходных аудиоданных.
+
+## Тестирование
+
+```bash
+python -m pip install -r requirements-dev.txt
 python -m pytest -q
-python -m compileall -q models train diarize eval experiments utils
-python train/run.py --help
-python eval/eer.py --help
-python eval/der.py --help
-python diarize/pipeline.py --help
+python -m compileall diarize eval experiments tests
+git diff --check
 ```
 
-Полный Kaggle smoke run требует подключённых datasets, Internet для ViYT-Diar/Silero
-и GPU runtime. Считайте успешным только завершённый notebook с `manifest.json`,
-`der_results.json` и `status: complete`; локальный синтетический тест notebook не
-является измерением качества и не должен попадать в таблицу DER/EER.
+Тесты и CI проверяют код на CPU-совместимых локальных fixtures и **не скачивают** реальные датасеты или checkpoint. Для воспроизведения опубликованных чисел нужны реальные аудио, точные версии моделей и зафиксированный scoring protocol.
 
-## RTTM и Audacity
+## Ограничения и научная корректность
 
-```bash
-python diarize/rttm_convert.py to_audacity results/audio.rttm results/labels.txt
-python diarize/rttm_convert.py to_rttm results/labels.txt results/audio.rttm --file_id audio
-```
+- **Данных недостаточно для универсальных выводов.** ViYT-Diar уже применялся для исследовательских ablation; синтетический benchmark не воспроизводит всю сложность живых диалогов; DataHive содержит только восемь записей с `K=2`.
+- **Разметка неоднородна.** Synthetic reference частично VAD-assisted; DataHive reference — *silver*, а не независимо подтверждённая вручную ground truth.
+- **Одновременная речь:** текущий inference назначает только **одну speaker label в момент времени**, поэтому не моделирует overlap как отдельные параллельные потоки.
+- **Вероятный перенос между корпусами не доказан.** Разделение источников и speaker IDs снижает риск leakage, но не доказывает отсутствие повторения одного и того же реального человека между внешними датасетами. Полный манифест обучения epoch-34 checkpoint недоступен.
+- **Checkpoint compatibility критична.** Кэши и метрики, вычисленные с неправильным порядком операций `Bottle2neck`, нельзя смешивать с результатами исправленного encoder.
+- **Безопасная смена параметров:** пороги и новые алгоритмы должны проверяться на отдельной вручную проверенной development-выборке, после чего — на нетронутом test set.
 
-## Какие измерения нужны для НИР
+Для воспроизводимой публикации следует сохранять commit репозитория, SHA-256 checkpoint и исходного encoder, ревизии аудиодатасетов, конфигурации VAD/эмбеддингов/кластеризации, состояние overlap/UEM/collar, seed, хеши reference/RTTM и provenance кэшей.
 
-Для первого запуска DER на Kaggle используйте отдельный
-[`kaggle/ViYT_Diar_DER.ipynb`](kaggle/ViYT_Diar_DER.ipynb): подключите обновлённый
-dataset проекта `ecapa-tdnn` с `model_0034.model`, включите Internet и запустите все
-ячейки (GPU рекомендуется). VLSP для этого notebook не требуется.
-Notebook скачивает полный test split [ViYT-Diar](https://huggingface.co/datasets/tuanduy1612/ViYT-Diar),
-экспортирует WAV/reference RTTM, выполняет diarization с automatic speaker count
-и считает corpus DER через pyannote.metrics (collar 0.25 s, overlap учитывается).
-Обучения и удаления моделей нет. Каждый запуск создаёт отдельную папку в
-`/kaggle/working`; ZIP включает RTTM, DER JSON/CSV, таблицу corpus summary,
-параметры, revision dataset, SHA модели, версии зависимостей и копию кода.
-Исходные WAV и веса в ZIP не дублируются. Измеренные результаты появятся только
-после выполнения notebook; EER/minDCF на VLSP остаются отдельной verification оценкой.
 
-### ViYT-Diar: oracle number of speakers
+## Лицензия и использование данных
 
-В том же notebook доступны `SPEAKER_MODE = 'automatic'` (default) и `'oracle'`.
-Для oracle подключите маленький `kaggle/viyt-oracle-code.zip` как дополнительный
-Kaggle dataset, оставьте подключённый dataset с моделью 34 и добавьте исходный ZIP
-результатов automatic как ещё один dataset. Kaggle распакует его; при нескольких
-baseline укажите `BASELINE_RESULTS` — каталог с `manifest.json` и `der_results.json`.
-Смените только `SPEAKER_MODE` и выполните Run All в новой сессии.
+Исходный код распространяется на условиях [MIT License](LICENSE.md)
 
-Revision зафиксирован: `c66b118709d68c7538408d086232d850356db374`, test — ровно 100
-записей. Oracle передаёт существующему `diarize(n_speakers=...)` только количество
-уникальных reference labels. AHC использует fixed `n_clusters`, без применения
-threshold к числу кластеров. VAD, preprocessing, encoder, окна, постобработка и
-pyannote scoring не меняются. Нехватка окон или пустой VAD при заданном числе
-спикеров останавливает прогон с audio_id и manifest `failed`; неполный corpus не
-выдаётся за завершённый. Automatic с пустой речью сохраняет прежнее поведение.
-
-Результаты находятся в новом каталоге запуска, внутри `results/baseline` либо
-`results/oracle_num_speakers`. `automatic_vs_oracle.csv/json` содержит измеренные
-значения и delta = oracle − automatic (DER/components — процентные пункты).
-Перед сравнением сверяются SHA модели, WAV/reference, revision, параметры,
-устройство, CUDA, Python и записанные версии численных библиотек; baseline DER
-пересчитывается по сохранённым RTTM. Исходный baseline не перезаписывается.
-Изменения кода pipeline ограничены диагностикой; остальные прежние модули
-inference/scoring проверяются по SHA. Снимок кода и manifest включены в новый ZIP.
-
-`diagnostics.csv/json` показывает число окон, размеры кластеров и counts до/после
-постобработки. Сглаживание может убрать короткий кластер, поэтому **итоговая**
-speaker-count accuracy oracle не обязана быть 100%; точное число проверяется
-сразу после AHC. Raw reference/predicted speech duration — объединение интервалов
-до collar, а `scored_reference_speaker_time` — знаменатель DER. `manual_review.csv`
-выделяет три подозрительные записи для прослушивания, но не исключает их из corpus
-и не объявляет reference неполным. Oracle — диагностическое условие, не результат
-полностью автоматической системы. Реальные oracle метрики появятся после запуска.
-
-1. На development corpus выполнить отдельные серии clustering, AHC threshold, VAD,
-   window и known/automatic speaker count; сохранить DER/components и count accuracy/MAE.
-2. Выбрать параметры, зафиксировать их и получить corpus DER на отдельном test corpus.
-3. Сравнить Dolly и Dolly → VLSP checkpoints на одном полном verification protocol:
-   таблица model / training data / EER / minDCF. Самостоятельно добавить достоверную
-   training provenance; имя checkpoint не доказывает, на каких данных он обучался.
-4. Построить loss/accuracy/LR и EER vs epoch из реальных score logs/CSV.
-5. Для augmentation сравнить none/noise/rir/full при одинаковых split, бюджете обучения
-   и seed; при возможности повторить выбранные эксперименты на нескольких seeds.
