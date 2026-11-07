@@ -161,3 +161,10 @@ def test_compactness_is_scale_invariant_and_artifacts_reject_non_normalized_rows
     else:
         raise AssertionError("non-normalized diagnostic embeddings were serialized")
     assert not (tmp_path / "bad").exists()
+
+
+def test_write_artifacts_preserves_float32_embeddings(tmp_path):
+    embeddings = np.eye(2, dtype=np.float32)
+    write_artifacts(tmp_path, embeddings, [(0., 1.), (1., 2.)], {}, {})
+    with np.load(tmp_path / "embeddings.npz") as arrays:
+        assert arrays["embeddings"].dtype == np.float32

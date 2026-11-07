@@ -199,11 +199,16 @@ def reference_similarity_stats(embeddings, classifications, max_windows=None):
 
 def write_artifacts(output_dir, embeddings, segments, trace, config):
     """Write the stable diagnostic artifact schema without rerunning inference."""
-    embeddings, starts, ends = validate_embeddings(embeddings, [s for s, _ in segments], [e for _, e in segments])
-    if len(embeddings) and not np.allclose(np.linalg.norm(embeddings, axis=1), 1., atol=1e-5):
+    serialized = np.asarray(embeddings)
+    validated, starts, ends = validate_embeddings(
+        serialized, [s for s, _ in segments], [e for _, e in segments])
+    if len(validated) and not np.allclose(np.linalg.norm(validated, axis=1), 1., atol=1e-5):
         raise ValueError("serialized embeddings must be L2-normalized")
+    if serialized.dtype.kind != "f":
+        serialized = validated
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    np.savez(output_dir / "embeddings.npz", embeddings=embeddings, window_starts=starts, window_ends=ends)
+    np.savez(output_dir / "embeddings.npz", embeddings=serialized,
+             window_starts=starts, window_ends=ends)
     (output_dir / "pipeline_trace.json").write_text(json.dumps(trace, indent=2, sort_keys=True), encoding="utf-8")
     (output_dir / "config.json").write_text(json.dumps(config, indent=2, sort_keys=True), encoding="utf-8")

@@ -51,6 +51,21 @@ def cached_digest(path):
         return _embedding_digest(windows, arrays["embeddings"]), len(windows)
 
 
+def repair_legacy_float64_cache(path, expected_digest):
+    """Repair the former diagnostic-writer upcast only when provenance matches exactly."""
+    with np.load(path) as arrays:
+        embeddings = arrays["embeddings"]
+        starts, ends = arrays["window_starts"], arrays["window_ends"]
+    if embeddings.dtype != np.float64:
+        return False
+    restored = embeddings.astype(np.float32)
+    windows = list(zip(starts.tolist(), ends.tolist()))
+    if _embedding_digest(windows, restored) != expected_digest:
+        return False
+    np.savez(path, embeddings=restored, window_starts=starts, window_ends=ends)
+    return True
+
+
 def run(args):
     config_path = Path(args.config).resolve()
     annotations = Path(args.annotation_manifest).resolve()
@@ -88,6 +103,10 @@ def run(args):
             cache_path = artifact_dir / "embeddings.npz"
             if cache_path.is_file():
                 digest, window_count = cached_digest(cache_path)
+                if digest != expected[(mode, record["recording_id"])]:
+                    repair_legacy_float64_cache(
+                        cache_path, expected[(mode, record["recording_id"])])
+                    digest, window_count = cached_digest(cache_path)
             else:
                 if encoder is None:
                     encoder = load_model(str(checkpoint), args.device)
