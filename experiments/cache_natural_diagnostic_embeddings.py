@@ -30,7 +30,7 @@ from utils.seed import set_seed
 
 
 DEFAULT_RESULTS = ROOT / "results/natural_vietnamese_benchmark/full_evaluation/recording_results.json"
-DEFAULT_OUTPUT = ROOT / "results/partition_quality_stability/embedding_cache"
+DEFAULT_OUTPUT = ROOT / "results/partition_quality_stability/embedding_cache_verified"
 
 
 def expected_digests(path):
@@ -121,9 +121,11 @@ def run(args):
                     "embedding": config["embedding"],
                 }
                 write_artifacts(
-                    output / mode, embeddings, windows,
+                    artifact_dir, embeddings, windows,
                     {"schema_version": 1, "recording_id": record["recording_id"], "stages": {}},
                     metadata)
+                if not cache_path.is_file():
+                    raise RuntimeError(f"{record['recording_id']}/{mode}: cache was not written")
             if digest != expected[(mode, record["recording_id"])]:
                 raise RuntimeError(f"{record['recording_id']}/{mode}: cached digest mismatch")
             cached_rows.append({"recording_id": record["recording_id"], "mode": mode,
