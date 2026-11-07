@@ -45,6 +45,9 @@ def evaluate_model(model_path, records, trials, device='auto', p_target=0.05, c_
     result = verification_metrics(scores, labels, p_target, c_miss, c_fa)
     result.update(pairs=len(trials), positive_pairs=sum(labels), negative_pairs=len(labels)-sum(labels),
                   model=str(model_path), protocol_sha256=hashlib.sha256(json.dumps(trials).encode()).hexdigest())
+    from utils.provenance import sha256
+    from models import ecapa_tdnn
+    result['encoder_source_sha256'] = sha256(ecapa_tdnn.__file__)
     return result
 
 
