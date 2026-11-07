@@ -2,7 +2,7 @@
 
 ## Status
 
-This document defines the frozen research protocol and the reporting ledger. Real-data conclusions are pending completion of the analysis. DataHive annotations are silver references derived from independent channel-wise VAD; they are not manually verified ground truth.
+This document defines the frozen research protocol and the reporting ledger. The real-data analysis and the targeted 24-excerpt listening audit are complete. DataHive annotations remain silver references derived from independent channel-wise VAD; the targeted audit does not make the full corpus manually verified ground truth.
 
 ## Research question
 
@@ -49,7 +49,7 @@ Saved stage-count evidence must be read by stage. On `vi_000004`, Robust AHC sel
 
 The stability artifacts contain 16 recording/mode groups per method and perturbation family. Averaging the saved group summaries, Robust angular-noise runs changed K in `0.5069` of runs and had mean ARI `0.6678` against the unperturbed partition. Robust short-prefix runs changed K in `0.8438` of runs, with mean ARI `0.1440` and mean changed-assignment fraction `0.4288`. Fixed 0.65 had no angular-noise count changes and mean ARI `0.9004`, but its short-prefix count-change fraction was `0.9792`. These are stability measurements, not correctness rankings. The controlled `correct_k_wrong_partition` case gives K=2 with ARI `-0.5` for Fixed, Legacy, and Robust, directly demonstrating that correct count does not guarantee a correct partition.
 
-The saved silver-reference audit covers all eight DataHive recordings. Its fixed rules produced 432 simultaneous-activity intervals totaling 347.3 seconds, 438 suspicious intervals, and 1,586 high-confidence channel-separated windows. The review manifest contains 24 items and explicitly records `human_verified: false`; no suspicious interval is treated as a corrected label or proof of leakage.
+The saved silver-reference audit covers all eight DataHive recordings. Its fixed rules produced 432 simultaneous-activity intervals totaling 347.3 seconds, 438 suspicious intervals, and 1,586 high-confidence channel-separated windows. All 24 review excerpts were manually checked (`human_verified: true`): 23 contain two different simultaneous speakers (`A`), while `vi_000004_01.wav` contains speech only in the left channel and noise in the right (`C-L`). Reference RTTM files were not modified. This targeted result identifies one local overlap error but is not a full-corpus ground-truth validation.
 
 The cross-dataset comparison reads saved CSV/JSON only. It marks raw DER as non-comparable across corpora, compares Robust-versus-Fixed deltas only within a corpus, and leaves hierarchy failure types unavailable until integrated merge artifacts exist. ViYT-Diar supplies stage counts and SpeakerError only, so its partition evidence remains unavailable rather than inferred from a temporal-error proxy.
 
@@ -123,5 +123,5 @@ Each final classification may contain multiple mechanisms: incorrect hierarchy c
 - **Partition-quality comparison:** complete for saved DataHive initial AHC labels; Spectral/NME-SC retain aggregate-only initial metrics.
 - **Cross-speaker merge frequency:** complete as an oracle diagnostic over K=1...10 cuts.
 - **Perturbation and short-hierarchy stability:** saved artifacts summarized above; correctness interpretation remains pending integrated partition/hierarchy evidence.
-- **DataHive manual listening:** pending; no human-verified labels are claimed.
+- **DataHive manual listening:** complete for all 24 targeted excerpts; 23 `A`, one `C-L` (`vi_000004_01.wav`, right-channel noise). Full-corpus human verification remains unavailable.
 - **Cross-dataset interpretation and recommendation:** complete at mechanism level; raw DER remains non-comparable across corpora.
