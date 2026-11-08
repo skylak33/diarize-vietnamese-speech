@@ -17,9 +17,9 @@ from sklearn.metrics import silhouette_score
 
 
 _CONFIDENCE_MERGE_DEFAULTS = dict(
-    centroid_similarity_threshold=0.80,
-    cross_median_threshold=0.78,
-    cross_lower_threshold=0.65,
+    centroid_similarity_threshold=0.65,
+    cross_median_threshold=0.25,
+    cross_lower_threshold=0.10,
     max_compactness_drop=0.12,
     min_similarity_margin=0.02,
     subsample_size=32,

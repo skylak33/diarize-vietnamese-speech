@@ -30,8 +30,8 @@ from utils.provenance import sha256, environment
 
 ROOT = Path(__file__).resolve().parents[1]
 CHECKPOINT_HASH = '58f3b402afa1de3c0a2543e845267146544be7ba74cad1a38cb4d26303afd325'
-MODERATE = dict(centroid_similarity_threshold=.65, cross_median_threshold=.25,
-                cross_lower_threshold=.10)
+MODERATE = dict(centroid_similarity_threshold=.55, cross_median_threshold=.20,
+                cross_lower_threshold=.05)
 METHODS = {
     'fixed_065': dict(threshold=.65),
     'fixed_075': dict(threshold=.75),
