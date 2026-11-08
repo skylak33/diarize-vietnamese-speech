@@ -22,7 +22,8 @@ from utils.seed import set_seed
 from utils.provenance import sha256
 from diarize.vad import load_audio, get_speech_segments
 from diarize.cluster import (cluster_embeddings, merge_short_segments,
-                             merge_similar_clusters, smooth_labels)
+                             merge_similar_clusters, smooth_labels,
+                             merge_clusters_confidence_aware, _confidence_merge_parameters)
 from diarize.config import (load_config, pipeline_kwargs, set_config_value,
                             validate_config)
 from diarize.embedding_diagnostics import write_artifacts
@@ -158,7 +159,17 @@ def diarize(
     evaluation_protocol: str | None = None,
     reference_source: str | None = None,
     count_estimator: str | None = None,
+    confidence_aware_merge: bool = False,
+    confidence_merge_config: dict | None = None,
 ) -> str:
+    if not isinstance(confidence_aware_merge, bool):
+        raise ValueError('confidence_aware_merge must be boolean')
+    confidence_parameters = _confidence_merge_parameters(confidence_merge_config)
+    if confidence_aware_merge:
+        if centroid_merge:
+            raise ValueError('centroid_merge and confidence_aware_merge are mutually exclusive')
+        if method != 'ahc' or count_estimator not in {None, 'backend_default'} or n_speakers is not None:
+            raise ValueError('confidence_aware_merge requires automatic fixed AHC without an oracle count')
     set_seed(seed)
     if diagnostics is not None:
         diagnostics.update(requested_n_speakers=n_speakers, n_embedding_windows=0,
@@ -283,6 +294,16 @@ def diarize(
     elif centroid_merge and diagnostics is not None:
         diagnostics['centroid_merge_skipped_known_count'] = True
     labels_after_centroid_merge = labels.copy()
+    confidence_trace = None
+    if confidence_aware_merge:
+        labels, confidence_trace = merge_clusters_confidence_aware(
+            embeddings, labels, embedding_segments, confidence_parameters,
+            return_diagnostics=True)
+        if diagnostics is not None:
+            diagnostics.update(confidence_aware_merge=confidence_trace,
+                n_clusters_after_postmerge=len(set(labels)),
+                cluster_sizes_after_postmerge=numpy.unique(labels, return_counts=True)[1].tolist())
+    labels_after_confidence_merge = labels.copy()
 
     print(f"\n[diarize] === Шаг 5: Постобработка ===")
     labels = smooth_labels(sub_segs, labels, window=3)
@@ -313,6 +334,7 @@ def diarize(
         trace = {"schema_version": 1, "recording_id": file_id,
                  "stages": {"initial_ahc": {"labels": [int(label) for label in initial_labels]},
                             "after_centroid_merge": {"labels": [int(label) for label in labels_after_centroid_merge]},
+                            "after_confidence_aware_merge": {"labels": labels_after_confidence_merge.tolist()},
                             "after_smoothing": {"labels": [int(label) for label in labels_after_smoothing]},
                             "partitioned_segments": stage(partitioned_segments, partitioned_labels),
                             "segments_after_short_merge": stage(segments_after_short_merge, labels_after_short_merge),
@@ -326,6 +348,8 @@ def diarize(
             "centroid_similarity_threshold": centroid_similarity_threshold,
             "max_small_cluster_size": max_small_cluster_size,
             "centroid_similarity_margin": centroid_similarity_margin, "device": device,
+            "confidence_aware_merge": confidence_aware_merge,
+            "confidence_merge_config": confidence_parameters,
             "diagnostic_counterfactuals": diagnostic_counterfactuals}
         config = {"schema_version": 1, "recording_id": file_id,
                   "audio_sha256": sha256(audio_path) if Path(audio_path).is_file() else None,
@@ -335,6 +359,9 @@ def diarize(
                   "evaluation_protocol": evaluation_protocol, "reference_source": reference_source}
         write_artifacts(Path(diagnostic_output_dir) / file_id, embeddings, embedding_segments, trace, config)
         artifact_dir = Path(diagnostic_output_dir) / file_id
+        if confidence_trace is not None:
+            (artifact_dir / 'confidence_merge_decisions.json').write_text(
+                json.dumps(confidence_trace, indent=2, allow_nan=False), encoding='utf-8')
         if cluster_trace:
             (artifact_dir / "ahc_merges.json").write_text(
                 json.dumps(cluster_trace, indent=2, sort_keys=True), encoding="utf-8")
@@ -344,7 +371,7 @@ def diarize(
 
             def counterfactual(use_smoothing, use_short_merge):
                 alternative_segments = list(embedding_segments)
-                alternative_labels = labels_after_centroid_merge.copy()
+                alternative_labels = labels_after_confidence_merge.copy()
                 if use_smoothing:
                     alternative_labels = smooth_labels(
                         alternative_segments, alternative_labels, window=3)
@@ -409,6 +436,7 @@ def parse_cli_args(argv=None):
     parser.add_argument("--centroid_similarity_threshold", type=float, default=argparse.SUPPRESS)
     parser.add_argument("--max_small_cluster_size", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--centroid_similarity_margin", type=float, default=argparse.SUPPRESS)
+    parser.add_argument('--confidence_aware_merge', action='store_true', default=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     config = load_config(args.config)
     paths = {
@@ -422,6 +450,7 @@ def parse_cli_args(argv=None):
         'centroid_similarity_threshold': 'postprocessing.centroid_merge.similarity_threshold',
         'max_small_cluster_size': 'postprocessing.centroid_merge.max_small_cluster_size',
         'centroid_similarity_margin': 'postprocessing.centroid_merge.similarity_margin',
+        'confidence_aware_merge': 'postprocessing.confidence_aware_merge.enabled',
         'seed': 'seed', 'device': 'device',
     }
     for name, path in paths.items():
@@ -458,6 +487,8 @@ if __name__ == "__main__":
         centroid_similarity_threshold=args.centroid_similarity_threshold,
         max_small_cluster_size=args.max_small_cluster_size,
         centroid_similarity_margin=args.centroid_similarity_margin,
+        confidence_aware_merge=args.confidence_aware_merge,
+        confidence_merge_config=args.confidence_merge_config,
         min_segment_sec=args.min_segment_sec,
         vad_min_speech_ms=args.vad_min_speech_ms,
         vad_speech_pad_ms=args.vad_speech_pad_ms,

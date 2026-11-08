@@ -19,6 +19,15 @@ postprocessing:
     similarity_threshold: 0.80
     max_small_cluster_size: 4
     similarity_margin: 0.05
+  confidence_aware_merge:
+    enabled: false
+    centroid_similarity_threshold: 0.65
+    cross_median_threshold: 0.25
+    cross_lower_threshold: 0.10
+    max_compactness_drop: 0.12
+    min_similarity_margin: 0.02
+    subsample_size: 32
+    min_cluster_size: 2
 evaluation:
   collar: 0.25
   skip_overlap: false

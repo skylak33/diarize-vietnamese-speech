@@ -10,7 +10,8 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from diarize.cluster import (cluster_embeddings, merge_short_segments,
-                             merge_similar_clusters, smooth_labels)
+                             merge_similar_clusters, smooth_labels,
+                             merge_clusters_confidence_aware)
 from diarize.pipeline import merge_consecutive_segments, partition_overlapping_windows
 from eval.der import evaluate_annotations, load_rttm
 
@@ -45,6 +46,9 @@ def _condition_variants(embeddings, segments, config, n_speakers):
             max_small_cluster_size=config.get("max_small_cluster_size", 4),
             min_similarity_margin=config.get("centroid_similarity_margin", .05))
     centroid_count = _speaker_count(labels)
+    if config.get('confidence_aware_merge', False) and n_speakers is None:
+        labels = merge_clusters_confidence_aware(
+            embeddings, labels, segments, config.get('confidence_merge_config'))
     result = {}
     for name, use_smoothing in (("current", True), ("without_smoothing", False)):
         final_segments, final_labels, smoothed_count = _postprocess(
@@ -59,6 +63,8 @@ def _condition_variants(embeddings, segments, config, n_speakers):
                 "final": _speaker_count(final_labels),
             },
         }
+        if config.get('confidence_aware_merge', False):
+            result[name]['stages']['after_confidence_aware_merge'] = _speaker_count(labels)
     return result
 
 
