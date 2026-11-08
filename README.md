@@ -98,10 +98,6 @@ python diarize/pipeline.py audio.wav \
   --model exps/exp1/model/model_0034.model \
   --config configs/diarization_confidence_aware_experimental.yaml \
   --output results/audio.rttm
-```
-
-See [the research protocol and measured limitations](docs/CONFIDENCE_AWARE_CLUSTER_MERGING.md).
-The centroid and confidence-aware mergers cannot be enabled together.
 
 ## Оценка
 
