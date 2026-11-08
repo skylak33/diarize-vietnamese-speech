@@ -410,6 +410,8 @@ def representative_cases(rows):
         'negative_passes_many_gates': sorted([row for row in rows if row['reference_merge_label'] == 'negative'],
             key=lambda row: (row['failed_gate_count'], -(row['centroid_similarity'] or -1)))[:3],
         'accepted_positive': [row for row in rows if row['reference_merge_label'] == 'positive' and row['accepted']],
+        'ambiguous_initial_cluster': sorted([row for row in rows if row['reference_merge_label'] == 'ambiguous'],
+            key=lambda row: row['centroid_similarity'] or -1, reverse=True)[:2],
     }
     positives = [row for row in rows if row['reference_merge_label'] == 'positive'
                  and row['centroid_similarity'] is not None]
@@ -601,6 +603,7 @@ def read_candidate_csv(path):
             row[key] = json.loads(row[key])
         for key in (*FEATURES, 'compactness_after'):
             row[key] = float(row[key]) if row[key] else None
+        row['failed_gate_count'] = int(row['failed_gate_count'])
         row['accepted'] = row['accepted'] == 'True'
     return rows
 
@@ -633,6 +636,9 @@ def refresh_derived(args):
     summary = read_json(output / 'summary.json')
     summary['validated_initial_pair_features'] = count
     write_json(output / 'summary.json', summary)
+    examples = representative_cases(populations['actual_unique_first'])
+    examples.extend(dict(category='exploratory_accepted', **row) for row in summary['exploratory_case_accepted'])
+    write_csv(output / 'representative_failures.csv', examples)
     write_json(output / 'derived_provenance.json', dict(environment=environment(),
         analysis_source_sha256=sha256(__file__), validated_initial_pair_features=count,
         reused_candidates_sha256=sha256(output / 'candidate_pairs.csv'),

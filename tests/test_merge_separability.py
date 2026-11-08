@@ -186,3 +186,19 @@ def test_saved_candidate_csv_preserves_feature_and_membership_types(tmp_path):
     restored = read_candidate_csv(path)
     assert restored[0]['compactness_after'] == pytest.approx(1.)
     assert validate_membership_features(embeddings, restored, trace['parameters']) == 1
+
+
+def test_reconstruction_does_not_forward_evaluation_labels(monkeypatch, tmp_path):
+    from experiments import analyze_merge_separability as analysis
+    embeddings = np.ones((2, 2))
+    calls = []
+    def cluster(values, **kwargs):
+        assert values is embeddings
+        calls.append(kwargs)
+        return np.zeros(2, dtype=int)
+    monkeypatch.setattr(analysis, 'cluster_embeddings', cluster)
+    labels, origin = analysis._initial_labels(
+        dict(archive=str(tmp_path / 'cached.npz'), speaker_ids=['evaluation_only']), embeddings)
+    assert labels.tolist() == [0, 0]
+    assert calls == [dict(method='ahc', threshold=.75, seed=42)]
+    assert 'reconstructed' in origin
