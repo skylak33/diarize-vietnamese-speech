@@ -208,6 +208,138 @@ These comparisons use identical cached embeddings within each corpus. ViYT's
 historical frontend uses silence 200 ms; DataHive uses 100 ms. Frontends are not
 changed to make cross-corpus results appear comparable.
 
+## Measured results (2026-11-08)
+
+The candidate was frozen at `f76c7e4`, before exploratory evaluation. Selected
+configuration: `confidence_moderate`, also provided in
+`configs/diarization_confidence_aware_experimental.yaml`. Algorithm SHA256:
+`241132be61056e398dec0e85b774c3ade9fa47260350cfe945a6f286f445cf13`.
+The default experimental gates remain the strict operating point; selecting the
+YAML explicitly reproduces the development-selected moderate point.
+
+Development, 300 clean synthetic conversations, full pipeline, final partition:
+
+| Method | DER % | SpeakerError % | Count accuracy % | ARI | Purity | Fragmentation |
+|---|---:|---:|---:|---:|---:|---:|
+| Fixed AHC 0.65 | 9.2713 | 8.8354 | 48.33 | 0.8546 | 0.9952 | 1.3998 |
+| Fixed AHC 0.75 | 6.0574 | 5.6215 | 69.33 | 0.9117 | 0.9772 | 1.1410 |
+| Fixed 0.75 + existing centroid | 6.0574 | 5.6215 | 69.33 | 0.9117 | 0.9772 | 1.1410 |
+| Legacy Adaptive | 9.1993 | 8.7635 | 57.67 | 0.8127 | 0.9668 | 1.2649 |
+| Robust Adaptive | 10.6547 | 10.2188 | 55.00 | 0.7761 | 0.9612 | 1.3557 |
+| Spectral | 8.8421 | 8.4062 | 63.67 | 0.9006 | 0.9969 | 1.4124 |
+| NME-SC | 17.9660 | 17.5301 | 63.00 | 0.7915 | 0.9957 | 1.7899 |
+| COCAM strict | 6.0574 | 5.6215 | 69.33 | 0.9117 | 0.9772 | 1.1410 |
+| COCAM selected moderate | 5.8953 | 5.4594 | 69.67 | 0.9150 | 0.9772 | 1.1378 |
+
+Count MAE decreases from 0.3667 to 0.3633. Only `development_000291` improves;
+299 recordings are unchanged and none has worse DER. Paired mean DER change is
+-0.1596 points, median zero; pooled change is -0.1621 points. This is one
+successful example, not broad evidence of better clustering.
+
+| Reference K (60 conversations each) | Fixed DER % | COCAM DER % | Fixed count accuracy % | COCAM count accuracy % |
+|---|---:|---:|---:|---:|
+| 1 | 5.8362 | 4.9461 | 83.33 | 85.00 |
+| 2 | 4.8076 | 4.8076 | 73.33 | 73.33 |
+| 3 | 3.6874 | 3.6874 | 71.67 | 71.67 |
+| 4 | 6.1570 | 6.1570 | 66.67 | 66.67 |
+| 5 | 8.8781 | 8.8781 | 51.67 | 51.67 |
+
+The sole accepted development merge joins two 19-window fragments of one speaker:
+centroid 0.5595, cross median 0.2289, q20 0.1418, compactness drop 0.0655.
+K changes 2 to 1, ARI 0 to 1, purity stays 1, fragmentation 2 to 1, and DER
+48.9091% to 1.0386%. Smoothing retains this improvement. The centroid baseline
+cannot join these equally sized substantial clusters under its existing rule.
+Moderate COCAM accepts 1 of 1,439 proposals; the other 1,438 abstain. Primary
+failed gates are centroid similarity (1,393) and insufficient support (45).
+These counts include reexamined pairs across rounds; full failed-gate lists
+remain available. Strict COCAM accepts none.
+
+### Frozen exploratory comparisons
+
+These are exploratory reused-test evaluations, not independent validation.
+
+| Corpus | Fixed/centroid DER % | COCAM DER % | Fixed SpeakerError % | COCAM SpeakerError % | Improved/worse/unchanged |
+|---|---:|---:|---:|---:|---:|
+| DataHive, 8 recordings | 13.9945 | 13.9383 | 8.1947 | 8.1385 | 1 / 0 / 7 |
+| ViYT-Diar, 100 recordings | 15.1240 | 14.9281 | 9.0144 | 8.8186 | 2 / 0 / 98 |
+
+DataHive accepts 1/361 proposals (`vi_000003`, initial K 10 to 9); 360 reject.
+Its primary rejected gates are centroid (264), support (78), median (9), mutual
+neighbor (5), margin (4). ViYT accepts 2/367 proposals; 365 reject, primarily
+centroid (253) and support (112). One ViYT merge crosses dominant reference
+speaker identities. Thus only three of four accepted merges across all three
+corpora have matching dominant reference identities.
+
+DataHive final count accuracy remains 0/8, MAE 4.375 to 4.125. ViYT count accuracy
+remains 60%, MAE 0.65 to 0.63. DataHive pooled DER change is -0.0562 points
+(paired mean -0.0887, median zero); ViYT pooled change is -0.1959 points
+(paired mean -0.2015, median zero). Historical ViYT DER was 15.123975%; the
+present 15.123985% baseline scores full-precision geometry before textual RTTM
+millisecond rounding. SpeakerError reproduces 9.014420%.
+
+There are no final DER regressions, but there is an important partition failure:
+`V-cuzXOX9sM` merges different speakers. Immediate purity falls 0.90625 to
+0.78125 and ARI 0.39836 to 0.22223. After smoothing its purity is 0.71875,
+versus baseline 0.875, and ARI 0.10821 versus 0.30783. Despite that, final DER
+improves 63.3099% to 52.7956% under global speaker matching. Lower DER therefore
+does not establish speaker-purity preservation. No observed DER regression is
+not evidence that the acceptance criterion prevents destructive identity merges.
+
+Postprocessing also matters in DataHive. Corpus COCAM DER changes 12.4954%
+(initial), 12.4111% (merged), 13.9383% (smoothed/final). ARI changes 0.83034,
+0.83056, 0.72811; purity 0.98273, 0.98273, 0.94456. Smoothing consumes part of
+the merge benefit. Historical DataHive purity 0.9870 was a duration-weighted
+initial-partition metric; it should not be compared directly with this table's
+equal-window final-partition purity. `vi_000004` receives no new merge and its
+known hierarchy failure remains unresolved.
+
+### Stability and efficiency
+
+On the balanced 25-recording development probe, Fixed/centroid/COCAM have no K
+changes under angular noise (50 trials each, mean ARI 1). With 75% subsampling,
+each changes K in 6/50 trials, mean ARI 0.9289. Robust changes K in 3/50 angular
+trials (ARI 0.9922) and 13/50 subsampling trials (ARI 0.8733). However, no COCAM
+merge is accepted in that subset, so its apparent merge stability is vacuous.
+
+A separate post-hoc probe targets all four recordings with accepted merges.
+COCAM changes K in 4/8 angular trials (mean ARI 0.8883) and 6/8 subsampling
+trials (ARI 0.7159), compared with Fixed's 0/8 (ARI 0.9507) and 2/8 (ARI 0.6141).
+Changed merge links total 10,480 and 6,202 respectively; these are correlated
+window-pair counts, not independent decisions. The DataHive and `jE9ZB-zqEgs`
+merges disappear under both angular seeds. The incorrect `V-cuzXOX9sM` merge
+persists under both angular seeds: stable decisions can still be wrong.
+No parameters were changed after these observations.
+
+CPU clustering/postprocessing totals over the 300 dev recordings are 0.281 s
+Fixed, 0.290 s centroid and 0.928 s COCAM, excluding cached frontend extraction
+and evaluation. Single-input profiles with allocation tracing: 46-window/K5
+input, 0.0032 s/0.114 MiB Fixed versus 0.0139 s/0.220 MiB COCAM; 1,342-window/K10
+DataHive input, 0.1997 s/9.83 MiB Fixed versus 0.2946 s/9.83 MiB COCAM.
+Traced allocations are not total process RSS; AHC dominates the larger peak.
+These single-run timings establish practical scale, not statistically precise
+performance ratios.
+
+Artifacts are under `results/confidence_aware_merging/`: split audit, resumable
+cache, development/frozen candidate, per-stage results, proposal traces,
+reference merge audits, paired comparisons, balanced stability, exploratory
+corpora, and `posthoc_analysis/` profiles/accepted-case stability. Reproduce the
+last analysis with:
+
+```powershell
+python experiments/analyze_confidence_merge_results.py --root results/confidence_aware_merging
+```
+
+The analysis also refuses an existing output directory. Artifacts, audio,
+embeddings and RTTM collections are excluded from Git. Recommendation: retain
+COCAM as experimental. Its measured dev gain is concentrated in one single-speaker
+conversation, K=2–5 do not improve, accepted merges are unstable in targeted
+checks, and one reused-test merge damages speaker purity. Independent validation
+remains necessary before replacing Fixed AHC.
+
+Final verification: `python -m pytest -q` reports 348 passed, 0 failed, 0 skipped;
+`python -m compileall -q diarize eval experiments tests` and `git diff --check`
+succeed. The experimental YAML exactly matches the frozen effective parameters.
+
 ## Scientific limitations
 
 Synthetic conversations reuse source voices and utterances, contain clean
