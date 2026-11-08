@@ -93,7 +93,7 @@ Experimental confidence-aware merging is opt-in after Fixed AHC:
 ```bash
 python diarize/pipeline.py audio.wav \
   --model exps/exp1/model/model_0034.model \
-  --method ahc --threshold 0.75 --confidence_aware_merge \
+  --config configs/diarization_confidence_aware_experimental.yaml \
   --output results/audio.rttm
 ```
 

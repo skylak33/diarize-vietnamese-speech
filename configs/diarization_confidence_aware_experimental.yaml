@@ -1,0 +1,17 @@
+# Frozen development-selected operating point; independent validation is unavailable.
+clustering:
+  method: ahc
+  count_estimator: backend_default
+  threshold: 0.75
+postprocessing:
+  centroid_merge:
+    enabled: false
+  confidence_aware_merge:
+    enabled: true
+    centroid_similarity_threshold: 0.55
+    cross_median_threshold: 0.20
+    cross_lower_threshold: 0.05
+    max_compactness_drop: 0.12
+    min_similarity_margin: 0.02
+    subsample_size: 32
+    min_cluster_size: 2

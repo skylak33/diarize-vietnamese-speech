@@ -100,6 +100,14 @@ postprocessing:
     assert args.threshold == .75 and args.centroid_merge is False
 
 
+def test_frozen_experimental_yaml_is_explicit_and_valid():
+    path = Path(__file__).resolve().parents[1] / 'configs/diarization_confidence_aware_experimental.yaml'
+    args, _ = parse_cli_args(['audio.wav', '--model', 'model', '--config', str(path)])
+    assert args.confidence_aware_merge and not args.centroid_merge
+    assert args.threshold == .75 and args.count_estimator is None
+    assert args.confidence_merge_config['centroid_similarity_threshold'] == .55
+
+
 @pytest.mark.parametrize('extra,error', [
     ('  centroid_merge:\n    enabled: true\n', 'mutually exclusive'),
     ('  confidence_aware_merge:\n    enabled: true\n    subsample_size: 1\n', 'integer >= 2'),
