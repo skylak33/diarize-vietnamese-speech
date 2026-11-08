@@ -8,11 +8,262 @@ Methods:
 """
 
 import heapq
+from itertools import combinations
 
 import numpy
 from sklearn.cluster import AgglomerativeClustering, KMeans, SpectralClustering
 from sklearn.preprocessing import normalize
 from sklearn.metrics import silhouette_score
+
+
+_CONFIDENCE_MERGE_DEFAULTS = dict(
+    centroid_similarity_threshold=0.80,
+    cross_median_threshold=0.78,
+    cross_lower_threshold=0.65,
+    max_compactness_drop=0.12,
+    min_similarity_margin=0.02,
+    subsample_size=32,
+    min_cluster_size=2,
+)
+
+
+def _confidence_merge_parameters(config: dict | None) -> dict:
+    """Return validated confidence-aware merge parameters."""
+    config = {} if config is None else config
+    if not isinstance(config, dict):
+        raise ValueError("config must be a dictionary")
+    unknown = set(config) - set(_CONFIDENCE_MERGE_DEFAULTS)
+    if unknown:
+        raise ValueError(f"Unknown confidence-aware merge option: {sorted(unknown)[0]}")
+    parameters = {**_CONFIDENCE_MERGE_DEFAULTS, **config}
+    for name, value in parameters.items():
+        if (isinstance(value, (bool, numpy.bool_)) or not isinstance(value, (int, float, numpy.number))
+                or not numpy.isfinite(value)):
+            raise ValueError(f"{name} must be a finite number")
+    if any(not -1 <= parameters[name] <= 1 for name in (
+            'centroid_similarity_threshold', 'cross_median_threshold', 'cross_lower_threshold')):
+        raise ValueError("similarity thresholds must be between -1 and 1")
+    if not 0 <= parameters['max_compactness_drop'] <= 2:
+        raise ValueError("max_compactness_drop must be between 0 and 2")
+    if not 0 <= parameters['min_similarity_margin'] <= 2:
+        raise ValueError("min_similarity_margin must be between 0 and 2")
+    for name in ('subsample_size', 'min_cluster_size'):
+        if (not isinstance(parameters[name], (int, numpy.integer))
+                or parameters[name] < 2):
+            raise ValueError(f"{name} must be an integer >= 2")
+        parameters[name] = int(parameters[name])
+    return parameters
+
+
+def _bounded_rows(rows: numpy.ndarray, limit: int) -> numpy.ndarray:
+    if len(rows) <= limit:
+        return rows
+    indices = numpy.linspace(0, len(rows) - 1, limit, dtype=int)
+    return rows[indices]
+
+
+def _compactness(rows: numpy.ndarray, limit: int) -> float | None:
+    rows = _bounded_rows(rows, limit)
+    if len(rows) < 2:
+        return None
+    similarities = rows @ rows.T
+    return float(numpy.median(similarities[numpy.triu_indices(len(rows), 1)]))
+
+
+def _pair_evidence(cluster_a: numpy.ndarray, cluster_b: numpy.ndarray,
+                   parameters: dict) -> dict:
+    """Compute bounded, robust evidence for one candidate pair."""
+    sampled_a = _bounded_rows(cluster_a, parameters['subsample_size'])
+    sampled_b = _bounded_rows(cluster_b, parameters['subsample_size'])
+    centroid_a, centroid_b = cluster_a.mean(axis=0), cluster_b.mean(axis=0)
+    norm_a, norm_b = numpy.linalg.norm(centroid_a), numpy.linalg.norm(centroid_b)
+    centroid_similarity = (None if norm_a <= 1e-12 or norm_b <= 1e-12 else
+                           float(centroid_a @ centroid_b / (norm_a * norm_b)))
+    cross = (sampled_a @ sampled_b.T).ravel()
+    lower, median, upper = numpy.quantile(cross, [.2, .5, .8])
+    compactness_a = _compactness(sampled_a, parameters['subsample_size'])
+    compactness_b = _compactness(sampled_b, parameters['subsample_size'])
+    # Equal bounded support keeps the small component visible in an imbalanced pair.
+    merged_compactness = _compactness(
+        numpy.vstack((sampled_a, sampled_b)), 2 * parameters['subsample_size'])
+    component_compactness = [value for value in (compactness_a, compactness_b)
+                             if value is not None]
+    compactness_drop = (None if not component_compactness else
+                        float(min(component_compactness) - merged_compactness))
+    return dict(
+        centroid_similarity=centroid_similarity,
+        cross_similarity=dict(count=int(len(cross)), median=float(median),
+                              lower_quantile=float(lower), upper_quantile=float(upper),
+                              iqr=float(numpy.quantile(cross, .75)
+                                        - numpy.quantile(cross, .25))),
+        compactness_a=compactness_a,
+        compactness_b=compactness_b,
+        merged_compactness=merged_compactness,
+        compactness_drop=compactness_drop,
+    )
+
+
+def _speech_duration(timestamps) -> float | None:
+    if timestamps is None:
+        return None
+    duration, boundary = 0., -numpy.inf
+    for start, end in sorted(map(tuple, timestamps)):
+        duration += max(0., end - max(start, boundary))
+        boundary = max(boundary, end)
+    return float(duration)
+
+
+def _cluster_summary(embeddings: numpy.ndarray, labels: numpy.ndarray,
+                     timestamps, subsample_size: int) -> list[dict]:
+    summaries = []
+    for label in numpy.unique(labels):
+        mask = labels == label
+        duration = _speech_duration(None if timestamps is None else timestamps[mask])
+        summaries.append(dict(cluster=int(label), size=int(mask.sum()), duration=duration,
+                              compactness=_compactness(embeddings[mask], subsample_size)))
+    return summaries
+
+
+def merge_clusters_confidence_aware(
+    embeddings: numpy.ndarray,
+    labels: numpy.ndarray,
+    timestamps=None,
+    config: dict | None = None,
+    return_diagnostics: bool = False,
+):
+    """Conservatively merge clusters supported by distribution and margin gates.
+
+    The decision is a conjunction of interpretable gates, not a calibrated
+    probability. Reference labels and a target speaker count are never used.
+    """
+    embeddings = numpy.asarray(embeddings, dtype=float)
+    labels = numpy.asarray(labels)
+    parameters = _confidence_merge_parameters(config)
+    if embeddings.ndim != 2 or labels.ndim != 1:
+        raise ValueError("embeddings must be 2-D and labels must be 1-D")
+    if len(embeddings) != len(labels):
+        raise ValueError("embeddings and labels must have equal length")
+    if labels.dtype.kind not in 'iu' and len(labels):
+        raise ValueError("labels must be integers")
+    if embeddings.shape[1] == 0:
+        raise ValueError("embeddings must have a nonempty feature dimension")
+    if timestamps is not None:
+        timestamps = numpy.asarray(timestamps, dtype=float)
+        if (timestamps.shape != (len(labels), 2) or not numpy.isfinite(timestamps).all()
+                or numpy.any(timestamps[:, 1] < timestamps[:, 0])):
+            raise ValueError("timestamps must contain one finite (start, end) pair per embedding")
+    if (not numpy.isfinite(embeddings).all()
+            or (len(embeddings) and (numpy.linalg.norm(embeddings, axis=1) <= 1e-12).any())):
+        raise ValueError("Embeddings must be finite nonzero vectors")
+
+    normalized = (embeddings if not len(embeddings) else
+                  normalize(embeddings, norm='l2'))
+    result = labels.astype(int, copy=True)
+    initial_clusters = _cluster_summary(
+        normalized, result, timestamps, parameters['subsample_size'])
+    decisions = []
+    accepted_merges = 0
+    step = 0
+    evidence_by_pair = {}
+
+    while len(numpy.unique(result)) > 1:
+        unique = numpy.unique(result)
+        cluster_count = len(unique)
+        for label_a, label_b in combinations(unique, 2):
+            if (label_a, label_b) in evidence_by_pair:
+                continue
+            rows_a, rows_b = normalized[result == label_a], normalized[result == label_b]
+            evidence = _pair_evidence(rows_a, rows_b, parameters)
+            evidence_by_pair[(label_a, label_b)] = evidence
+
+        robust_scores = {pair: evidence['cross_similarity']['median']
+                         for pair, evidence in evidence_by_pair.items()}
+        best_partner = {}
+        for label in unique:
+            choices = [(score, pair[1] if pair[0] == label else pair[0])
+                       for pair, score in robust_scores.items() if label in pair]
+            best_partner[label] = max(choices, key=lambda item: (item[0], -int(item[1])))[1]
+
+        candidates = []
+        for pair, evidence in evidence_by_pair.items():
+            label_a, label_b = pair
+            alternatives_a = [score for other, score in robust_scores.items()
+                              if label_a in other and label_b not in other]
+            alternatives_b = [score for other, score in robust_scores.items()
+                              if label_b in other and label_a not in other]
+            margins = ([robust_scores[pair] - max(alternatives_a)] if alternatives_a else [])
+            margins += ([robust_scores[pair] - max(alternatives_b)] if alternatives_b else [])
+            margin = None if not margins else float(min(margins))
+            mutual = best_partner[label_a] == label_b and best_partner[label_b] == label_a
+            size_a, size_b = int(numpy.sum(result == label_a)), int(numpy.sum(result == label_b))
+            conditions = dict(
+                sufficient_support=min(size_a, size_b) >= parameters['min_cluster_size'],
+                valid_centroids=evidence['centroid_similarity'] is not None,
+                centroid_similarity=(evidence['centroid_similarity'] is not None and
+                    evidence['centroid_similarity'] >= parameters['centroid_similarity_threshold']),
+                cross_median=evidence['cross_similarity']['median']
+                    >= parameters['cross_median_threshold'],
+                cross_lower_quantile=evidence['cross_similarity']['lower_quantile']
+                    >= parameters['cross_lower_threshold'],
+                compactness=(evidence['compactness_drop'] is not None and
+                    evidence['compactness_drop'] <= parameters['max_compactness_drop']),
+                mutual_nearest=mutual,
+                similarity_margin=margin is None or margin >= parameters['min_similarity_margin'],
+            )
+            reasons = [name for name, passed in conditions.items() if not passed]
+            mask_a, mask_b = result == label_a, result == label_b
+            duration_a = _speech_duration(None if timestamps is None else timestamps[mask_a])
+            duration_b = _speech_duration(None if timestamps is None else timestamps[mask_b])
+            decision = dict(
+                merge_step=step, cluster_a=int(label_a), cluster_b=int(label_b),
+                cluster_a_size=size_a, cluster_b_size=size_b,
+                cluster_a_duration=duration_a, cluster_b_duration=duration_b,
+                **evidence, similarity_margin=margin, mutual_nearest=mutual,
+                decision_evidence=conditions,
+                accepted=False, rejection_reasons=reasons,
+                rejection_reason=None if not reasons else reasons[0],
+                cluster_count_before=cluster_count, cluster_count_after=cluster_count,
+            )
+            candidates.append((not reasons,
+                               evidence['cross_similarity']['lower_quantile'],
+                               evidence['cross_similarity']['median'],
+                               evidence['centroid_similarity'] or -1.0,
+                               -int(label_a), -int(label_b), decision))
+
+        acceptable = [candidate for candidate in candidates if candidate[0]]
+        if not acceptable:
+            decisions.extend(candidate[-1] for candidate in candidates)
+            break
+        selected = max(acceptable)[-1]
+        for candidate in candidates:
+            decision = candidate[-1]
+            if decision is selected:
+                decision['accepted'] = True
+                decision['rejection_reasons'] = []
+                decision['rejection_reason'] = None
+                decision['cluster_count_after'] = cluster_count - 1
+            elif not decision['rejection_reasons']:
+                decision['rejection_reasons'] = ['lower_ranked_candidate']
+                decision['rejection_reason'] = 'lower_ranked_candidate'
+            decisions.append(decision)
+        result[result == selected['cluster_b']] = selected['cluster_a']
+        evidence_by_pair = {pair: evidence for pair, evidence in evidence_by_pair.items()
+                            if selected['cluster_a'] not in pair and selected['cluster_b'] not in pair}
+        accepted_merges += 1
+        step += 1
+
+    diagnostics = dict(
+        strategy='confidence_aware', parameters=parameters,
+        initial_cluster_count=len(initial_clusters),
+        final_cluster_count=len(numpy.unique(result)),
+        initial_clusters=initial_clusters,
+        final_clusters=_cluster_summary(normalized, result, timestamps,
+                                        parameters['subsample_size']),
+        merge_attempts=len(decisions), accepted_merges=accepted_merges,
+        rejected_merges=len(decisions) - accepted_merges,
+        merge_decisions=decisions,
+    )
+    return (result, diagnostics) if return_diagnostics else result
 
 
 def merge_similar_clusters(
