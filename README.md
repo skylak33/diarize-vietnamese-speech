@@ -217,18 +217,6 @@ report.md
 Reference labels используются только после inference для diagnostics. Oracle cut
 sweep показывает ёмкость уже построенной иерархии и не является production rule.
 
-## Документация
-
-- [`docs/DIARIZATION.md`](docs/DIARIZATION.md) — pipeline, clustering и ablations.
-- [`docs/SPEAKER_PARTITION_QUALITY_ANALYSIS.md`](docs/SPEAKER_PARTITION_QUALITY_ANALYSIS.md) — текущий research protocol и evidence ledger.
-- [`docs/NATURAL_VIETNAMESE_DIARIZATION.md`](docs/NATURAL_VIETNAMESE_DIARIZATION.md) — DataHive benchmark.
-- [`docs/SYNTHETIC_VIETNAMESE_DIARIZATION.md`](docs/SYNTHETIC_VIETNAMESE_DIARIZATION.md) — synthetic benchmark.
-- [`docs/CORRECTED_VIYT_DIAR_EVALUATION.md`](docs/CORRECTED_VIYT_DIAR_EVALUATION.md) — frozen ViYT reproduction.
-- [`docs/ECAPA_CHECKPOINT_AUDIT.md`](docs/ECAPA_CHECKPOINT_AUDIT.md) — checkpoint/source compatibility audit.
-
-Остальные файлы в `docs/` — узкие технические отчёты и исторические протоколы;
-они не являются отдельными production-инструкциями.
-
 ## Проверка изменений
 
 ```bash
