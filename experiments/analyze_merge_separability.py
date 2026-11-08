@@ -13,10 +13,11 @@ from pathlib import Path
 import numpy as np
 from sklearn.metrics import (average_precision_score, precision_recall_curve,
                              roc_auc_score, roc_curve)
+from sklearn.preprocessing import normalize
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from diarize.cluster import cluster_embeddings
+from diarize.cluster import cluster_embeddings, _pair_evidence
 from experiments.analyze_partition_quality import associate_reference_windows
 from experiments.analyze_confidence_merge_results import load_entry
 from experiments.benchmark_confidence_aware_merging import read_json, write_json, write_csv
@@ -210,11 +211,17 @@ def rejection_summary(rows):
         positive_only_failure=sum(row['reference_merge_label'] == 'positive' and not row['accepted'] and
             not row['decision_evidence'][key] and sum(not v for v in row['decision_evidence'].values()) == 1
             for row in rows),
+        negative_only_failure=sum(row['reference_merge_label'] == 'negative' and
+            not row['decision_evidence'][key] and sum(not v for v in row['decision_evidence'].values()) == 1
+            for row in rows),
+        positive_passed=sum(row['reference_merge_label'] == 'positive' and row['decision_evidence'][key]
+                            for row in rows),
         negative_passed=sum(row['reference_merge_label'] == 'negative' and row['decision_evidence'][key]
                             for row in rows)) for key in conditions]
 
 
 def operating_points(rows, feature):
+    observations = rows
     _, _, y, x = _feature_values(rows, feature)
     if len(np.unique(y)) < 2:
         return []
@@ -231,10 +238,14 @@ def operating_points(rows, feature):
                                      ((precision >= target) & (accepted > 0)))
             index = (max(indices, key=lambda i: (precision[i] if kind == 'precision_at_recall' else
                                                 recall[i], -accepted[i])) if len(indices) else 0)
+            ambiguous_accepted = sum(row['reference_merge_label'] == 'ambiguous' and
+                row.get(feature) is not None and np.isfinite(row[feature]) and
+                FEATURES[feature] * row[feature] >= thresholds[index] for row in observations)
             rows.append(dict(feature=feature, kind=kind, target=target,
                 precision=float(precision[index]) if accepted[index] else None,
                 recall=float(recall[index]), false_positive_rate=float(fpr[index]),
                 accepted=int(accepted[index]), TP=int(tp[index]), FP=int(fp[index]),
+                accepted_ambiguous=int(ambiguous_accepted), accepted_total=int(accepted[index] + ambiguous_accepted),
                 score_threshold=float(thresholds[index]) if np.isfinite(thresholds[index]) else None,
                 direction=FEATURES[feature], diagnostic_only=True))
     return rows
@@ -423,6 +434,24 @@ def _initial_labels(entry, embeddings):
     return labels, 'reconstructed_once_missing_membership_artifact'
 
 
+def validate_membership_features(embeddings, rows, parameters):
+    """Verify reconstructed memberships against stored features using the original calculator."""
+    unit = normalize(np.asarray(embeddings, dtype=float), norm='l2')
+    count = 0
+    for row in rows:
+        evidence = _pair_evidence(unit[row['membership_a']], unit[row['membership_b']], parameters)
+        expected = [row[key] for key in ('centroid_similarity', 'median_cross_similarity',
+                    'q20_cross_similarity', 'cross_similarity_dispersion', 'compactness_loss', 'compactness_after')]
+        observed = [evidence['centroid_similarity'], evidence['cross_similarity']['median'],
+                    evidence['cross_similarity']['lower_quantile'], evidence['cross_similarity']['iqr'],
+                    evidence['compactness_drop'], evidence['merged_compactness']]
+        if any((a is None) != (b is None) or (a is not None and not np.isclose(a, b, atol=1e-12, rtol=1e-12))
+               for a, b in zip(expected, observed)):
+            raise ValueError('Reconstructed membership feature mismatch')
+        count += 1
+    return count
+
+
 def run(args):
     source, output = Path(args.source), Path(args.output)
     if output.exists():
@@ -433,6 +462,8 @@ def run(args):
     checkpoint_hash = sha256(ROOT / 'exps/exp1/model/model_0034.model')
     if checkpoint_hash != frozen['checkpoint_sha256']:
         raise ValueError('Frozen checkpoint mismatch')
+    if sha256(ROOT / 'models/ecapa_tdnn.py') != frozen['encoder_source_sha256']:
+        raise ValueError('Frozen encoder source mismatch')
     manifest = read_json(source / 'cache_development/manifest.json')
     if manifest['status'] != 'complete':
         raise ValueError('Incomplete development cache')
@@ -492,7 +523,9 @@ def run(args):
         membership_artifacts[rid] = initial.tolist()
         candidates = replay_candidates(rid, initial, by_recording[rid], associations)
         actual.extend(candidates)
-        initial_pairs.extend(initial_population(candidates, initial))
+        population_b = initial_population(candidates, initial)
+        validate_membership_features(embeddings, population_b, parameters)
+        initial_pairs.extend(population_b)
         provenance.append(dict(recording_id=rid, initial_K=len(set(initial.tolist())),
             windows=len(windows), label_origin=origin, archive_sha256=entry['archive_sha256'],
             metadata_sha256=entry['provenance']['metadata_sha256'], speaker_ids=entry['speaker_ids']))
@@ -530,6 +563,7 @@ def run(args):
     summary['recordings_total'] = len(manifest['entries'])
     summary['initial_generation_missing_pairs'] = 0
     summary['dynamic_revisits'] = len(actual) - len(unique)
+    summary['validated_initial_pair_features'] = len(initial_pairs)
     write_csv(output / 'feature_summary.csv', feature_rows)
     write_csv(output / 'decision_confusion.csv', confusion_rows)
     write_csv(output / 'rejection_analysis.csv', rejection_rows)
@@ -557,8 +591,58 @@ def run(args):
     print(json.dumps({key: value for key, value in summary.items() if key != 'feature_correlations'}, indent=2))
 
 
+def refresh_derived(args):
+    """Update small derived tables from saved candidates, without clustering or inference."""
+    output = Path(args.output)
+    import csv
+    def candidates(name):
+        with (output / name).open(newline='', encoding='utf-8') as handle:
+            rows = list(csv.DictReader(handle))
+        for row in rows:
+            for key in ('membership_a', 'membership_b', 'reference_a', 'reference_b',
+                        'decision_evidence', 'rejection_reasons', 'numeric_gate_deficits'):
+                row[key] = json.loads(row[key])
+            for key in FEATURES:
+                row[key] = float(row[key]) if row[key] else None
+            row['accepted'] = row['accepted'] == 'True'
+        return rows
+    raw = candidates('candidate_pairs.csv')
+    populations = {name: [row for row in raw if row['population'] == name]
+                   for name in ('actual_raw', 'initial_all')}
+    populations['actual_unique_first'] = candidates('unique_candidate_pairs.csv')
+    write_csv(output / 'rejection_analysis.csv', [dict(population=name, **row)
+        for name, values in populations.items() for row in rejection_summary(values)])
+    write_csv(output / 'operating_points.csv', [dict(population=name, **row)
+        for name, values in populations.items() for feature in FEATURES for row in operating_points(values, feature)])
+    by_recording = defaultdict(list)
+    for row in populations['initial_all']:
+        by_recording[row['recording_id']].append(row)
+    source = Path(args.source)
+    frozen = read_json(source / 'development/frozen_candidate.json')
+    if sha256(ROOT / 'diarize/cluster.py') != frozen['cluster_source_sha256']:
+        raise ValueError('Frozen clustering source changed')
+    count = 0
+    for entry in read_json(source / 'cache_development/manifest.json')['entries']:
+        if sha256(entry['archive']) != entry['archive_sha256']:
+            raise ValueError('Cache archive changed')
+        embeddings, _ = load_entry(entry)
+        count += validate_membership_features(embeddings, by_recording[entry['recording_id']],
+                                              frozen['effective_merge_parameters'])
+    summary = read_json(output / 'summary.json')
+    summary['validated_initial_pair_features'] = count
+    write_json(output / 'summary.json', summary)
+    write_json(output / 'derived_provenance.json', dict(environment=environment(),
+        analysis_source_sha256=sha256(__file__), validated_initial_pair_features=count,
+        reused_candidates_sha256=sha256(output / 'candidate_pairs.csv'),
+        action='Refreshed operating/rejection tables and verified memberships; no reclustering'))
+    print(f'Verified stored features for {count} initial pairs; refreshed derived tables.')
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--source', default='results/confidence_aware_merging')
     parser.add_argument('--output', default='results/merge_separability')
-    run(parser.parse_args())
+    parser.add_argument('--refresh-derived', action='store_true',
+                        help='Reuse saved candidate tables; do not recluster or extract features')
+    args = parser.parse_args()
+    refresh_derived(args) if args.refresh_derived else run(args)

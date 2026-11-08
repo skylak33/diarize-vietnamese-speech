@@ -7,7 +7,7 @@ from diarize.cluster import merge_clusters_confidence_aware
 from experiments.analyze_merge_separability import (
     label_pair, replay_candidates, initial_population, deduplicate,
     feature_statistics, decision_quality, rejection_summary, operating_points,
-    support_bin, dependency_groups)
+    support_bin, dependency_groups, validate_membership_features)
 from experiments.analyze_partition_quality import associate_reference_windows
 
 
@@ -144,3 +144,30 @@ def test_support_bins_and_shared_speaker_dependencies():
 def test_reference_labels_are_not_an_inference_argument():
     import inspect
     assert 'reference' not in str(inspect.signature(merge_clusters_confidence_aware))
+
+
+def test_hypothetical_high_precision_points_count_ambiguous_acceptances():
+    rows = [dict(reference_merge_label=label, centroid_similarity=score) for label, score in
+            [('positive', .9), ('negative', .1), ('ambiguous', .95)]]
+    high = next(row for row in operating_points(rows, 'centroid_similarity')
+                if row['kind'] == 'recall_at_precision' and row['target'] == .99)
+    assert high['accepted'] == 1 and high['precision'] == 1
+    assert high['accepted_ambiguous'] == 1 and high['accepted_total'] == 2
+
+
+def test_only_failed_gate_counts_include_negative_near_misses():
+    rows = [dict(reference_merge_label='negative', accepted=False,
+                 decision_evidence={'centroid_similarity': False, 'compactness': True})]
+    result = {row['condition']: row for row in rejection_summary(rows)}
+    assert result['centroid_similarity']['negative_only_failure'] == 1
+
+
+def test_reconstructed_memberships_are_verified_against_original_feature_calculator():
+    embeddings = np.ones((4, 2))
+    initial = np.array([0, 0, 1, 1])
+    _, trace = merge_clusters_confidence_aware(embeddings, initial, return_diagnostics=True)
+    rows = replay_candidates('r', initial, trace['merge_decisions'], associations(['a'] * 4))
+    assert validate_membership_features(embeddings, rows, trace['parameters']) == 1
+    rows[0]['centroid_similarity'] = .25
+    with pytest.raises(ValueError, match='feature mismatch'):
+        validate_membership_features(embeddings, rows, trace['parameters'])
