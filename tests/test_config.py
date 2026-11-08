@@ -13,6 +13,7 @@ def test_builtin_defaults_preserve_cli_behavior():
     assert args.window_sec == 1.5 and args.step_sec == .75
     assert args.vad_min_silence_ms == 100 and args.centroid_merge is False
     assert config == DEFAULT_CONFIG
+    assert args.confidence_aware_merge is False
 
 
 def test_cli_propagates_diagnostic_options_without_touching_pipeline_config():
@@ -81,4 +82,41 @@ def test_invalid_config_is_actionable(tmp_path, content, error):
     path = tmp_path / 'bad.yaml'
     path.write_text(content)
     with pytest.raises(ValueError, match=error):
+        load_config(path)
+
+
+def test_confidence_merge_yaml_and_cli_are_opt_in(tmp_path):
+    path = tmp_path / 'confidence.yaml'
+    path.write_text('''clustering:
+  threshold: 0.75
+postprocessing:
+  confidence_aware_merge:
+    enabled: true
+    cross_median_threshold: 0.3
+''')
+    args, _ = parse_cli_args(['audio.wav', '--model', 'model', '--config', str(path)])
+    assert args.confidence_aware_merge is True
+    assert args.confidence_merge_config['cross_median_threshold'] == .3
+    assert args.threshold == .75 and args.centroid_merge is False
+
+
+@pytest.mark.parametrize('extra,error', [
+    ('  centroid_merge:\n    enabled: true\n', 'mutually exclusive'),
+    ('  confidence_aware_merge:\n    enabled: true\n    subsample_size: 1\n', 'integer >= 2'),
+])
+def test_invalid_confidence_merge_options(tmp_path, extra, error):
+    path = tmp_path / 'bad.yaml'
+    path.write_text('postprocessing:\n  confidence_aware_merge:\n    enabled: true\n' + extra)
+    with pytest.raises(ValueError, match=error):
+        load_config(path)
+
+
+@pytest.mark.parametrize('clustering', [
+    'method: spectral', 'count_estimator: adaptive_ahc', 'count_estimator: adaptive_ahc_robust',
+])
+def test_confidence_merge_requires_fixed_ahc(tmp_path, clustering):
+    path = tmp_path / 'bad.yaml'
+    path.write_text('clustering:\n  ' + clustering + '\npostprocessing:\n'
+                    '  confidence_aware_merge:\n    enabled: true\n')
+    with pytest.raises(ValueError, match='requires fixed AHC'):
         load_config(path)

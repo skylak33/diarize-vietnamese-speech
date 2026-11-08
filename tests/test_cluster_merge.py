@@ -119,3 +119,35 @@ def test_known_speaker_count_skips_merge(monkeypatch):
     assert trace['n_clusters_before_postmerge'] == trace['n_clusters_after_postmerge'] == 2
     assert trace['centroid_merge_skipped_known_count'] is True
     assert trace['accepted_merges'] == 0
+
+
+def test_confidence_pipeline_trace_and_opt_in_preserve_baseline(monkeypatch, tmp_path):
+    import json
+    embeddings = np.array([[1., 0.]] * 4 + [[.99, .05]] * 4)
+    embeddings /= np.linalg.norm(embeddings, axis=1, keepdims=True)
+    _mock_pipeline(monkeypatch, embeddings)
+    initial = np.repeat([0, 1], 4)
+    monkeypatch.setattr(pipeline, 'cluster_embeddings', lambda *a, **k: initial.copy())
+    baseline = pipeline.diarize('sample.wav', 'unused', encoder=object())
+    assert baseline == pipeline.diarize('sample.wav', 'unused', encoder=object(),
+                                       confidence_aware_merge=False)
+    diagnostics = {}
+    result = pipeline.diarize('sample.wav', 'unused', encoder=object(),
+        confidence_aware_merge=True, diagnostics=diagnostics,
+        diagnostic_output_dir=str(tmp_path), diagnostic_counterfactuals=True)
+    assert 'SPEAKER_01' in baseline and 'SPEAKER_01' not in result
+    assert diagnostics['confidence_aware_merge']['accepted_merges'] == 1
+    assert diagnostics['n_clusters_after_postmerge'] == 1
+    trace = json.loads((tmp_path / 'sample/pipeline_trace.json').read_text())
+    assert trace['stages']['initial_ahc']['labels'] == initial.tolist()
+    assert set(trace['stages']['after_confidence_aware_merge']['labels']) == {0}
+    assert (tmp_path / 'sample/confidence_merge_decisions.json').exists()
+
+
+@pytest.mark.parametrize('kwargs', [
+    {'n_speakers': 2}, {'method': 'spectral'}, {'centroid_merge': True},
+    {'count_estimator': 'adaptive_ahc'}, {'count_estimator': 'adaptive_ahc_robust'},
+])
+def test_confidence_pipeline_rejects_incompatible_modes_before_loading_audio(kwargs):
+    with pytest.raises(ValueError):
+        pipeline.diarize('missing.wav', 'unused', confidence_aware_merge=True, **kwargs)

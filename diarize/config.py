@@ -5,6 +5,8 @@ from pathlib import Path
 
 import yaml
 
+from diarize.cluster import _CONFIDENCE_MERGE_DEFAULTS, _confidence_merge_parameters
+
 
 DEFAULT_CONFIG = {
     'sample_rate': 16000,
@@ -15,7 +17,9 @@ DEFAULT_CONFIG = {
                    'threshold': 0.65, 'max_speakers': 10},
     'postprocessing': {'centroid_merge': {'enabled': False, 'similarity_threshold': 0.80,
                                           'max_small_cluster_size': 4,
-                                          'similarity_margin': 0.05}},
+                                          'similarity_margin': 0.05},
+                       'confidence_aware_merge': {'enabled': False,
+                                                  **_CONFIDENCE_MERGE_DEFAULTS}},
     'evaluation': {'collar': 0.25, 'skip_overlap': False},
     'seed': 42,
     'device': 'auto',
@@ -84,6 +88,15 @@ def validate_config(config):
     _integer(merge['max_small_cluster_size'],
              'postprocessing.centroid_merge.max_small_cluster_size')
     _number(merge['similarity_margin'], 'postprocessing.centroid_merge.similarity_margin', 0, 2)
+    confidence = config['postprocessing']['confidence_aware_merge']
+    if not isinstance(confidence['enabled'], bool):
+        raise ValueError('postprocessing.confidence_aware_merge.enabled must be boolean')
+    _confidence_merge_parameters({key: value for key, value in confidence.items() if key != 'enabled'})
+    if confidence['enabled']:
+        if merge['enabled']:
+            raise ValueError('centroid_merge and confidence_aware_merge are mutually exclusive')
+        if clustering['method'] != 'ahc' or clustering['count_estimator'] != 'backend_default':
+            raise ValueError('confidence_aware_merge requires fixed AHC with backend_default')
     evaluation = config['evaluation']
     _number(evaluation['collar'], 'evaluation.collar', 0)
     if not isinstance(evaluation['skip_overlap'], bool):
@@ -127,4 +140,7 @@ def pipeline_kwargs(config):
                 centroid_similarity_threshold=merge['similarity_threshold'],
                 max_small_cluster_size=merge['max_small_cluster_size'],
                 centroid_similarity_margin=merge['similarity_margin'], seed=config['seed'],
+                confidence_aware_merge=config['postprocessing']['confidence_aware_merge']['enabled'],
+                confidence_merge_config={key: value for key, value in
+                    config['postprocessing']['confidence_aware_merge'].items() if key != 'enabled'},
                 device=config['device'])

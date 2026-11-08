@@ -52,6 +52,8 @@ def _confidence_merge_parameters(config: dict | None) -> dict:
                 or parameters[name] < 2):
             raise ValueError(f"{name} must be an integer >= 2")
         parameters[name] = int(parameters[name])
+    for name in parameters.keys() - {'subsample_size', 'min_cluster_size'}:
+        parameters[name] = float(parameters[name])
     return parameters
 
 
@@ -194,7 +196,7 @@ def merge_clusters_confidence_aware(
             margins = ([robust_scores[pair] - max(alternatives_a)] if alternatives_a else [])
             margins += ([robust_scores[pair] - max(alternatives_b)] if alternatives_b else [])
             margin = None if not margins else float(min(margins))
-            mutual = best_partner[label_a] == label_b and best_partner[label_b] == label_a
+            mutual = bool(best_partner[label_a] == label_b and best_partner[label_b] == label_a)
             size_a, size_b = int(numpy.sum(result == label_a)), int(numpy.sum(result == label_b))
             conditions = dict(
                 sufficient_support=min(size_a, size_b) >= parameters['min_cluster_size'],
