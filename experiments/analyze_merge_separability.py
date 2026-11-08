@@ -591,25 +591,27 @@ def run(args):
     print(json.dumps({key: value for key, value in summary.items() if key != 'feature_correlations'}, indent=2))
 
 
+def read_candidate_csv(path):
+    import csv
+    with Path(path).open(newline='', encoding='utf-8') as handle:
+        rows = list(csv.DictReader(handle))
+    for row in rows:
+        for key in ('membership_a', 'membership_b', 'reference_a', 'reference_b',
+                    'decision_evidence', 'rejection_reasons', 'numeric_gate_deficits', 'compactness_before'):
+            row[key] = json.loads(row[key])
+        for key in (*FEATURES, 'compactness_after'):
+            row[key] = float(row[key]) if row[key] else None
+        row['accepted'] = row['accepted'] == 'True'
+    return rows
+
+
 def refresh_derived(args):
     """Update small derived tables from saved candidates, without clustering or inference."""
     output = Path(args.output)
-    import csv
-    def candidates(name):
-        with (output / name).open(newline='', encoding='utf-8') as handle:
-            rows = list(csv.DictReader(handle))
-        for row in rows:
-            for key in ('membership_a', 'membership_b', 'reference_a', 'reference_b',
-                        'decision_evidence', 'rejection_reasons', 'numeric_gate_deficits'):
-                row[key] = json.loads(row[key])
-            for key in FEATURES:
-                row[key] = float(row[key]) if row[key] else None
-            row['accepted'] = row['accepted'] == 'True'
-        return rows
-    raw = candidates('candidate_pairs.csv')
+    raw = read_candidate_csv(output / 'candidate_pairs.csv')
     populations = {name: [row for row in raw if row['population'] == name]
                    for name in ('actual_raw', 'initial_all')}
-    populations['actual_unique_first'] = candidates('unique_candidate_pairs.csv')
+    populations['actual_unique_first'] = read_candidate_csv(output / 'unique_candidate_pairs.csv')
     write_csv(output / 'rejection_analysis.csv', [dict(population=name, **row)
         for name, values in populations.items() for row in rejection_summary(values)])
     write_csv(output / 'operating_points.csv', [dict(population=name, **row)

@@ -7,7 +7,8 @@ from diarize.cluster import merge_clusters_confidence_aware
 from experiments.analyze_merge_separability import (
     label_pair, replay_candidates, initial_population, deduplicate,
     feature_statistics, decision_quality, rejection_summary, operating_points,
-    support_bin, dependency_groups, validate_membership_features)
+    support_bin, dependency_groups, validate_membership_features,
+    annotate_deficits, read_candidate_csv)
 from experiments.analyze_partition_quality import associate_reference_windows
 
 
@@ -171,3 +172,17 @@ def test_reconstructed_memberships_are_verified_against_original_feature_calcula
     rows[0]['centroid_similarity'] = .25
     with pytest.raises(ValueError, match='feature mismatch'):
         validate_membership_features(embeddings, rows, trace['parameters'])
+
+
+def test_saved_candidate_csv_preserves_feature_and_membership_types(tmp_path):
+    from experiments.benchmark_confidence_aware_merging import write_csv
+    embeddings = np.ones((4, 2))
+    initial = np.array([0, 0, 1, 1])
+    _, trace = merge_clusters_confidence_aware(embeddings, initial, return_diagnostics=True)
+    rows = replay_candidates('r', initial, trace['merge_decisions'], associations(['a'] * 4))
+    annotate_deficits(rows, trace['parameters'])
+    path = tmp_path / 'candidates.csv'
+    write_csv(path, rows)
+    restored = read_candidate_csv(path)
+    assert restored[0]['compactness_after'] == 1.
+    assert validate_membership_features(embeddings, restored, trace['parameters']) == 1
