@@ -38,10 +38,13 @@ def test_production_defaults_and_frozen_benchmark_config_are_unchanged():
         "seed": 42,
         "device": "auto",
     }
-    assert DEFAULT_CONFIG == expected
-    assert load_config() == expected
-    assert yaml.safe_load(
-        (ROOT / "configs/diarization_default.yaml").read_text(encoding="utf-8")) == expected
+    configurations = [DEFAULT_CONFIG, load_config(), yaml.safe_load(
+        (ROOT / "configs/diarization_default.yaml").read_text(encoding="utf-8"))]
+    for configuration in configurations:
+        unchanged = copy.deepcopy(configuration)
+        experimental = unchanged['postprocessing'].pop('confidence_aware_merge')
+        assert experimental['enabled'] is False
+        assert unchanged == expected
 
     benchmark = json.loads(
         (ROOT / "configs/natural_vietnamese_benchmark.json").read_text(encoding="utf-8"))
