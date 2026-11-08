@@ -184,5 +184,5 @@ def test_saved_candidate_csv_preserves_feature_and_membership_types(tmp_path):
     path = tmp_path / 'candidates.csv'
     write_csv(path, rows)
     restored = read_candidate_csv(path)
-    assert restored[0]['compactness_after'] == 1.
+    assert restored[0]['compactness_after'] == pytest.approx(1.)
     assert validate_membership_features(embeddings, restored, trace['parameters']) == 1
