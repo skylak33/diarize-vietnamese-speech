@@ -152,7 +152,8 @@ def merge_clusters_confidence_aware(
     if timestamps is not None:
         timestamps = numpy.asarray(timestamps, dtype=float)
         if (timestamps.shape != (len(labels), 2) or not numpy.isfinite(timestamps).all()
-                or numpy.any(timestamps[:, 1] < timestamps[:, 0])):
+                or numpy.any(timestamps[:, 0] < 0)
+                or numpy.any(timestamps[:, 1] <= timestamps[:, 0])):
             raise ValueError("timestamps must contain one finite (start, end) pair per embedding")
     if (not numpy.isfinite(embeddings).all()
             or (len(embeddings) and (numpy.linalg.norm(embeddings, axis=1) <= 1e-12).any())):
@@ -180,21 +181,23 @@ def merge_clusters_confidence_aware(
 
         robust_scores = {pair: evidence['cross_similarity']['median']
                          for pair, evidence in evidence_by_pair.items()}
-        best_partner = {}
-        for label in unique:
-            choices = [(score, pair[1] if pair[0] == label else pair[0])
-                       for pair, score in robust_scores.items() if label in pair]
-            best_partner[label] = max(choices, key=lambda item: (item[0], -int(item[1])))[1]
+        neighbors = {label: [] for label in unique}
+        for (a, b), score in robust_scores.items():
+            neighbors[a].append((score, b))
+            neighbors[b].append((score, a))
+        for choices in neighbors.values():
+            choices.sort(key=lambda item: (-item[0], int(item[1])))
+        best_partner = {label: choices[0][1] for label, choices in neighbors.items()}
 
         candidates = []
         for pair, evidence in evidence_by_pair.items():
             label_a, label_b = pair
-            alternatives_a = [score for other, score in robust_scores.items()
-                              if label_a in other and label_b not in other]
-            alternatives_b = [score for other, score in robust_scores.items()
-                              if label_b in other and label_a not in other]
-            margins = ([robust_scores[pair] - max(alternatives_a)] if alternatives_a else [])
-            margins += ([robust_scores[pair] - max(alternatives_b)] if alternatives_b else [])
+            margins = []
+            for label, partner in ((label_a, label_b), (label_b, label_a)):
+                alternatives = neighbors[label]
+                alternative_index = int(alternatives[0][1] == partner)
+                if alternative_index < len(alternatives):
+                    margins.append(robust_scores[pair] - alternatives[alternative_index][0])
             margin = None if not margins else float(min(margins))
             mutual = bool(best_partner[label_a] == label_b and best_partner[label_b] == label_a)
             size_a, size_b = int(numpy.sum(result == label_a)), int(numpy.sum(result == label_b))
@@ -229,7 +232,8 @@ def merge_clusters_confidence_aware(
             candidates.append((not reasons,
                                evidence['cross_similarity']['lower_quantile'],
                                evidence['cross_similarity']['median'],
-                               evidence['centroid_similarity'] or -1.0,
+                               (evidence['centroid_similarity']
+                                if evidence['centroid_similarity'] is not None else -1.0),
                                -int(label_a), -int(label_b), decision))
 
         acceptable = [candidate for candidate in candidates if candidate[0]]
