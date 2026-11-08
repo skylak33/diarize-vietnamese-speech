@@ -267,6 +267,8 @@ def evaluate(args):
         environment=environment(), checkpoint_sha256=CHECKPOINT_HASH,
         encoder_source_sha256=sha256(ROOT / 'models/ecapa_tdnn.py'),
         cluster_source_sha256=sha256(ROOT / 'diarize/cluster.py'),
+        benchmark_source_sha256=sha256(__file__),
+        pipeline_source_sha256=sha256(ROOT / 'diarize/pipeline.py'),
         evaluation=dict(collar=.25, skip_overlap=False),
         partition_metrics='equal unambiguous embedding windows; final labels projected by maximum overlap',
         evidence='development' if not args.frozen else 'exploratory reused-test evaluation'))
@@ -325,11 +327,17 @@ def evaluate(args):
                         started = time.perf_counter()
                         perturbed, alternative_trace = infer(changed, [windows[i] for i in ids], method)
                         alternative = perturbed['merged'][1]
+                        baseline_links = (stages['initial'][1][ids, None] != stages['initial'][1][ids]) & (
+                            base[ids, None] == base[ids])
+                        alternative_links = (perturbed['initial'][1][:, None] != perturbed['initial'][1]) & (
+                            alternative[:, None] == alternative)
+                        changed_links = int(np.count_nonzero(np.triu(baseline_links != alternative_links, 1)))
                         stability.append(dict(recording_id=rid, method=method, family=family, seed=seed,
                             count_changed=len(set(base)) != len(set(alternative)),
                             ARI=float(adjusted_rand_score(base[ids], alternative)),
                             accepted_merges=alternative_trace.get('accepted_merges', 0),
                             merge_count_change=alternative_trace.get('accepted_merges', 0) - trace.get('accepted_merges', 0),
+                            changed_merge_links=changed_links,
                             runtime_seconds=time.perf_counter() - started))
         if (index + 1) % 25 == 0 or index == 0:
             print(f'Evaluated {index + 1}/{len(manifest["entries"])}', flush=True)
@@ -363,6 +371,9 @@ def evaluate(args):
             configuration=METHODS[selected], eligible=selected in eligible,
             effective_merge_parameters=_confidence_merge_parameters(METHODS[selected]['config']),
             selection_protocol=SELECTION, cluster_source_sha256=sha256(ROOT / 'diarize/cluster.py'),
+            benchmark_source_sha256=sha256(__file__),
+            pipeline_source_sha256=sha256(ROOT / 'diarize/pipeline.py'),
+            encoder_source_sha256=sha256(ROOT / 'models/ecapa_tdnn.py'),
             checkpoint_sha256=CHECKPOINT_HASH, environment=environment()))
 
 
